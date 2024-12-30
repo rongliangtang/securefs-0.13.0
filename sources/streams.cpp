@@ -22,14 +22,14 @@ namespace securefs
 {
 namespace internal
 {
-    class InvalidHMACStreamException : public InvalidFormatException
+    class InvalidMetaStreamException : public InvalidFormatException
     {
     private:
         id_type m_id;
         std::string m_msg;
 
     public:
-        explicit InvalidHMACStreamException(const id_type& id, std::string msg)
+        explicit InvalidMetaStreamException(const id_type& id, std::string msg)
         {
             memcpy(m_id.data(), id.data(), id.size());
             m_msg.swap(msg);
@@ -38,124 +38,62 @@ namespace internal
         std::string message() const override { return m_msg; }
     };
 
-    class HMACStream final : public StreamBase
+    class MetaStream final : public StreamBase
     {
     private:
-        key_type m_key;
         id_type m_id;
         std::shared_ptr<StreamBase> m_stream;
-        bool is_dirty;
-
-        typedef CryptoPP::HMAC<CryptoPP::SHA256> hmac_calculator_type;
-
-        static const size_t hmac_length = hmac_calculator_type::DIGESTSIZE;
 
     private:
         const id_type& id() const noexcept { return m_id; }
-        const key_type& key() const noexcept { return m_key; }
-
-        void run_mac(CryptoPP::MessageAuthenticationCode& calculator)
-        {
-            calculator.Update(id().data(), id().size());
-            std::array<byte, 4096> buffer;
-            offset_type off = hmac_length;
-            while (true)
-            {
-                auto rc = m_stream->read(buffer.data(), off, buffer.size());
-                if (rc == 0)
-                    break;
-                calculator.Update(buffer.data(), rc);
-                off += rc;
-            }
-        }
 
     public:
-        explicit HMACStream(const key_type& key_,
-                            const id_type& id_,
-                            std::shared_ptr<StreamBase> stream,
-                            bool check = true)
-            : m_key(key_), m_id(id_), m_stream(std::move(stream)), is_dirty(false)
+        explicit MetaStream(const id_type& id_,
+                            std::shared_ptr<StreamBase> stream)
+            : m_id(id_), m_stream(std::move(stream))
         {
             if (!m_stream)
                 throwVFSException(EFAULT);
-            if (check)
-            {
-                std::array<byte, hmac_length> hmac;
-                auto rc = m_stream->read(hmac.data(), 0, hmac.size());
-                if (rc == 0)
-                    return;
-                if (rc != hmac_length)
-                    throw InvalidHMACStreamException(
-                        id(), "The header field for stream is not of enough length");
-                hmac_calculator_type calculator;
-                calculator.SetKey(key().data(), key().size());
-                run_mac(calculator);
-                if (!calculator.Verify(hmac.data()))
-                    throw InvalidHMACStreamException(id(), "HMAC mismatch");
-            }
         }
 
-        ~HMACStream()
+        ~MetaStream()
         {
-            try
-            {
-                flush();
-            }
-            catch (...)
-            {
-                // ignore
-            }
+
         }
 
         void flush() override
         {
-            if (!is_dirty)
-                return;
-            hmac_calculator_type calculator;
-            calculator.SetKey(key().data(), key().size());
-            run_mac(calculator);
-            std::array<byte, hmac_length> hmac;
-            calculator.Final(hmac.data());
-            m_stream->write(hmac.data(), 0, hmac.size());
-            m_stream->flush();
-            is_dirty = false;
+
         }
 
         length_type size() const override
         {
-            auto sz = m_stream->size();
-            if (sz < hmac_length)
-                return 0;
-            return sz - hmac_length;
+            return m_stream->size();;
         }
 
         length_type read(void* output, offset_type off, length_type len) override
         {
-            return m_stream->read(output, off + hmac_length, len);
+            return m_stream->read(output, off, len);
         }
 
         void write(const void* input, offset_type off, length_type len) override
         {
-            m_stream->write(input, off + hmac_length, len);
-            is_dirty = true;
+            m_stream->write(input, off, len);
         }
 
         void resize(length_type len) override
         {
-            m_stream->resize(len + hmac_length);
-            is_dirty = true;
+            m_stream->resize(len);
         }
 
         bool is_sparse() const noexcept override { return m_stream->is_sparse(); }
     };
 }    // namespace internal
 
-std::shared_ptr<StreamBase> make_stream_hmac(const key_type& key_,
-                                             const id_type& id_,
-                                             std::shared_ptr<StreamBase> stream,
-                                             bool check)
+std::shared_ptr<StreamBase> make_stream_hmac(const id_type& id_,
+                                             std::shared_ptr<StreamBase> stream)
 {
-    return std::make_shared<internal::HMACStream>(key_, id_, std::move(stream), check);
+    return std::make_shared<internal::MetaStream>(id_, std::move(stream));
 }
 
 length_type CryptStream::read_block(offset_type block_number, void* output)
@@ -337,7 +275,7 @@ namespace internal
     private:
         CryptoPP::GCM<CryptoPP::AES>::Encryption m_enc;
         CryptoPP::GCM<CryptoPP::AES>::Decryption m_dec;
-        HMACStream m_metastream;
+        MetaStream m_metastream;
         id_type m_id;
         unsigned m_iv_size, m_header_size;
         bool m_check;
@@ -361,24 +299,20 @@ namespace internal
         explicit AESGCMCryptStream(std::shared_ptr<StreamBase> data_stream,
                                    std::shared_ptr<StreamBase> meta_stream,
                                    const key_type& data_key,
-                                   const key_type& meta_key,
                                    const id_type& id_,
-                                   bool check,
                                    unsigned block_size,
                                    unsigned iv_size,
                                    unsigned header_size)
             : CryptStream(data_stream, block_size)
-            , m_metastream(meta_key, id_, meta_stream, check)
+            , m_metastream( id_, meta_stream)
             , m_id(id_)
             , m_iv_size(iv_size)
             , m_header_size(header_size)
-            , m_check(check)
         {
             const byte null_iv[12] = {};
             m_enc.SetKeyWithIV(data_key.data(), data_key.size(), null_iv, array_length(null_iv));
             m_dec.SetKeyWithIV(data_key.data(), data_key.size(), null_iv, array_length(null_iv));
             warn_if_key_not_random(data_key, __FILE__, __LINE__);
-            warn_if_key_not_random(meta_key, __FILE__, __LINE__);
         }
 
     protected:
@@ -549,9 +483,7 @@ std::pair<std::shared_ptr<CryptStream>, std::shared_ptr<HeaderBase>>
 make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
                          std::shared_ptr<StreamBase> meta_stream,
                          const key_type& data_key,
-                         const key_type& meta_key,
                          const id_type& id_,
-                         bool check,
                          unsigned block_size,
                          unsigned iv_size,
                          unsigned header_size)
@@ -559,9 +491,7 @@ make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
     auto stream = std::make_shared<internal::AESGCMCryptStream>(std::move(data_stream),
                                                                 std::move(meta_stream),
                                                                 data_key,
-                                                                meta_key,
                                                                 id_,
-                                                                check,
                                                                 block_size,
                                                                 iv_size,
                                                                 header_size);

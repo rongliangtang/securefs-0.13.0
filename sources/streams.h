@@ -77,10 +77,8 @@ public:
     virtual void flush_header() = 0;
 };
 
-std::shared_ptr<StreamBase> make_stream_hmac(const key_type& key_,
-                                             const id_type& id_,
-                                             std::shared_ptr<StreamBase> stream,
-                                             bool check);
+std::shared_ptr<StreamBase> make_stream_hmac(const id_type& id_,
+                                             std::shared_ptr<StreamBase> stream);
 
 class BlockBasedStream : public StreamBase
 {
@@ -169,9 +167,7 @@ std::pair<std::shared_ptr<CryptStream>, std::shared_ptr<HeaderBase>>
 make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
                          std::shared_ptr<StreamBase> meta_stream,
                          const key_type& data_key,
-                         const key_type& meta_key,
                          const id_type& id_,
-                         bool check,
                          unsigned block_size,
                          unsigned iv_size,
                          unsigned header_size = 32);
