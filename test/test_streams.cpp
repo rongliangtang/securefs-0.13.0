@@ -249,7 +249,7 @@ TEST_CASE("Test streams")
     }
     {
         auto hmac_stream
-            = securefs::make_stream_hmac(id, std::make_shared<securefs::MemoryStream>());
+            = securefs::make_stream_hmac(key, id, std::make_shared<securefs::MemoryStream>(), true);
         test(*hmac_stream, 5000);
     }
     {
@@ -261,7 +261,9 @@ TEST_CASE("Test streams")
             = securefs::make_cryptstream_aes_gcm(std::make_shared<securefs::MemoryStream>(),
                                                  std::make_shared<securefs::MemoryStream>(),
                                                  key,
+                                                 key,
                                                  id,
+                                                 true,
                                                  4096,
                                                  12);
         std::vector<byte> header(aes_gcm_stream.second->max_header_length() - 1, 5);

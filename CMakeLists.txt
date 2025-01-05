@@ -91,9 +91,6 @@ set(CRYPTOPP_DIR ${EXTERNAL_DIR}/cryptopp)
 add_subdirectory(${CRYPTOPP_DIR})
 link_libraries(cryptopp-static)
 
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -g")
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -g")
-
 add_subdirectory(${EXTERNAL_DIR}/argon2)
 include_directories(${EXTERNAL_DIR}/argon2/include)
 link_libraries(argon2_static)
@@ -103,8 +100,6 @@ file(
     SOURCES
     sources/*.cpp
     sources/*.h
-    sources/integrity/*.cpp
-    sources/integrity/*.h
     ${EXTERNAL_DIR}/*.h
     ${EXTERNAL_DIR}/*.hpp
     ${EXTERNAL_DIR}/*.cpp

@@ -77,8 +77,10 @@ public:
     virtual void flush_header() = 0;
 };
 
-std::shared_ptr<StreamBase> make_stream_hmac(const id_type& id_,
-                                             std::shared_ptr<StreamBase> stream);
+std::shared_ptr<StreamBase> make_stream_hmac(const key_type& key_,
+                                             const id_type& id_,
+                                             std::shared_ptr<StreamBase> stream,
+                                             bool check);
 
 class BlockBasedStream : public StreamBase
 {
@@ -137,15 +139,7 @@ protected:
     decrypt(offset_type block_number, const void* input, void* output, length_type length)
         = 0;
 
-    void adjust_logical_size(length_type length) override
-    {
-        if (length % 4096 == 0){
-            m_stream->resize((length / 4096) * 4104);
-        } else {
-            m_stream->resize((length / 4096) * 4104 + length % 4096 + 8 );
-        }
-
-    }
+    void adjust_logical_size(length_type length) override { m_stream->resize(length); }
 
 private:
     length_type read_block(offset_type block_number, void* output) override;
@@ -175,7 +169,9 @@ std::pair<std::shared_ptr<CryptStream>, std::shared_ptr<HeaderBase>>
 make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
                          std::shared_ptr<StreamBase> meta_stream,
                          const key_type& data_key,
+                         const key_type& meta_key,
                          const id_type& id_,
+                         bool check,
                          unsigned block_size,
                          unsigned iv_size,
                          unsigned header_size = 32);
