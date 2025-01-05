@@ -137,7 +137,15 @@ protected:
     decrypt(offset_type block_number, const void* input, void* output, length_type length)
         = 0;
 
-    void adjust_logical_size(length_type length) override { m_stream->resize(length); }
+    void adjust_logical_size(length_type length) override
+    {
+        if (length % 4096 == 0){
+            m_stream->resize((length / 4096) * 4104);
+        } else {
+            m_stream->resize((length / 4096) * 4104 + length % 4096 + 8 );
+        }
+
+    }
 
 private:
     length_type read_block(offset_type block_number, void* output) override;

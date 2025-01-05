@@ -121,7 +121,7 @@ void Integrity::deserializeBinary(const std::string &filePath) {
     file.seekg(0, std::ios::beg);
 
     // Key 大小 = 36 字节, Value 大小 = 8 字节, 每个 KV = 44 字节
-    const std::streamsize kvSize = 36 + 8;
+    const std::streamsize kvSize = 40 + 8;
     if (fileSize % kvSize != 0) {
         throw std::runtime_error("Corrupted binary file: file size is not a multiple of 44 bytes.");
     }
