@@ -18,18 +18,21 @@
 #include <cryptopp/secblock.h>
 #include <cryptopp/sha.h>
 
+#include "integrity/integrity.h"
+#include "myutils.h"
+
 namespace securefs
 {
 namespace internal
 {
-    class InvalidHMACStreamException : public InvalidFormatException
+    class InvalidMetaStreamException : public InvalidFormatException
     {
     private:
         id_type m_id;
         std::string m_msg;
 
     public:
-        explicit InvalidHMACStreamException(const id_type& id, std::string msg)
+        explicit InvalidMetaStreamException(const id_type& id, std::string msg)
         {
             memcpy(m_id.data(), id.data(), id.size());
             m_msg.swap(msg);
@@ -38,133 +41,72 @@ namespace internal
         std::string message() const override { return m_msg; }
     };
 
-    class HMACStream final : public StreamBase
+    class MetaStream final : public StreamBase
     {
     private:
-        key_type m_key;
         id_type m_id;
         std::shared_ptr<StreamBase> m_stream;
-        bool is_dirty;
-
-        typedef CryptoPP::HMAC<CryptoPP::SHA256> hmac_calculator_type;
-
-        static const size_t hmac_length = hmac_calculator_type::DIGESTSIZE;
 
     private:
         const id_type& id() const noexcept { return m_id; }
-        const key_type& key() const noexcept { return m_key; }
-
-        void run_mac(CryptoPP::MessageAuthenticationCode& calculator)
-        {
-            calculator.Update(id().data(), id().size());
-            std::array<byte, 4096> buffer;
-            offset_type off = hmac_length;
-            while (true)
-            {
-                auto rc = m_stream->read(buffer.data(), off, buffer.size());
-                if (rc == 0)
-                    break;
-                calculator.Update(buffer.data(), rc);
-                off += rc;
-            }
-        }
 
     public:
-        explicit HMACStream(const key_type& key_,
-                            const id_type& id_,
-                            std::shared_ptr<StreamBase> stream,
-                            bool check = true)
-            : m_key(key_), m_id(id_), m_stream(std::move(stream)), is_dirty(false)
+        explicit MetaStream(const id_type& id_,
+                            std::shared_ptr<StreamBase> stream)
+            : m_id(id_), m_stream(std::move(stream))
         {
             if (!m_stream)
                 throwVFSException(EFAULT);
-            if (check)
-            {
-                std::array<byte, hmac_length> hmac;
-                auto rc = m_stream->read(hmac.data(), 0, hmac.size());
-                if (rc == 0)
-                    return;
-                if (rc != hmac_length)
-                    throw InvalidHMACStreamException(
-                        id(), "The header field for stream is not of enough length");
-                hmac_calculator_type calculator;
-                calculator.SetKey(key().data(), key().size());
-                run_mac(calculator);
-                if (!calculator.Verify(hmac.data()))
-                    throw InvalidHMACStreamException(id(), "HMAC mismatch");
-            }
         }
 
-        ~HMACStream()
+        ~MetaStream()
         {
-            try
-            {
-                flush();
-            }
-            catch (...)
-            {
-                // ignore
-            }
+
         }
 
         void flush() override
         {
-            if (!is_dirty)
-                return;
-            hmac_calculator_type calculator;
-            calculator.SetKey(key().data(), key().size());
-            run_mac(calculator);
-            std::array<byte, hmac_length> hmac;
-            calculator.Final(hmac.data());
-            m_stream->write(hmac.data(), 0, hmac.size());
-            m_stream->flush();
-            is_dirty = false;
+
         }
 
         length_type size() const override
         {
-            auto sz = m_stream->size();
-            if (sz < hmac_length)
-                return 0;
-            return sz - hmac_length;
+            return m_stream->size();;
         }
 
         length_type read(void* output, offset_type off, length_type len) override
         {
-            return m_stream->read(output, off + hmac_length, len);
+            return m_stream->read(output, off, len);
         }
 
         void write(const void* input, offset_type off, length_type len) override
         {
-            m_stream->write(input, off + hmac_length, len);
-            is_dirty = true;
+            m_stream->write(input, off, len);
         }
 
         void resize(length_type len) override
         {
-            m_stream->resize(len + hmac_length);
-            is_dirty = true;
+            m_stream->resize(len);
         }
 
         bool is_sparse() const noexcept override { return m_stream->is_sparse(); }
     };
 }    // namespace internal
 
-std::shared_ptr<StreamBase> make_stream_hmac(const key_type& key_,
-                                             const id_type& id_,
-                                             std::shared_ptr<StreamBase> stream,
-                                             bool check)
+std::shared_ptr<StreamBase> make_stream_hmac(const id_type& id_,
+                                             std::shared_ptr<StreamBase> stream)
 {
-    return std::make_shared<internal::HMACStream>(key_, id_, std::move(stream), check);
+    return std::make_shared<internal::MetaStream>(id_, std::move(stream));
 }
 
 length_type CryptStream::read_block(offset_type block_number, void* output)
 {
-    auto rc = m_stream->read(output, block_number * m_block_size, m_block_size);
+    auto input = make_unique_array<byte>(m_block_size + 8);
+    auto rc = m_stream->read(input.get(), block_number * (m_block_size + 8), m_block_size + 8);
     if (rc == 0)
         return 0;
-    decrypt(block_number, output, output, rc);
-    return rc;
+    decrypt(block_number, input.get(), output, rc);
+    return rc - 8;
 }
 
 length_type BlockBasedStream::read_block(offset_type block_number,
@@ -192,9 +134,9 @@ length_type BlockBasedStream::read_block(offset_type block_number,
 void CryptStream::write_block(offset_type block_number, const void* input, length_type length)
 {
     assert(length <= m_block_size);
-    auto buffer = make_unique_array<byte>(length);
+    auto buffer = make_unique_array<byte>(length + 8);
     encrypt(block_number, input, buffer.get(), length);
-    m_stream->write(buffer.get(), block_number * m_block_size, length);
+    m_stream->write(buffer.get(), block_number * (m_block_size + 8), length + 8);
 }
 
 void BlockBasedStream::read_then_write_block(offset_type block_number,
@@ -337,7 +279,7 @@ namespace internal
     private:
         CryptoPP::GCM<CryptoPP::AES>::Encryption m_enc;
         CryptoPP::GCM<CryptoPP::AES>::Decryption m_dec;
-        HMACStream m_metastream;
+        MetaStream m_metastream;
         id_type m_id;
         unsigned m_iv_size, m_header_size;
         bool m_check;
@@ -361,24 +303,20 @@ namespace internal
         explicit AESGCMCryptStream(std::shared_ptr<StreamBase> data_stream,
                                    std::shared_ptr<StreamBase> meta_stream,
                                    const key_type& data_key,
-                                   const key_type& meta_key,
                                    const id_type& id_,
-                                   bool check,
                                    unsigned block_size,
                                    unsigned iv_size,
                                    unsigned header_size)
             : CryptStream(data_stream, block_size)
-            , m_metastream(meta_key, id_, meta_stream, check)
+            , m_metastream( id_, meta_stream)
             , m_id(id_)
             , m_iv_size(iv_size)
             , m_header_size(header_size)
-            , m_check(check)
         {
             const byte null_iv[12] = {};
             m_enc.SetKeyWithIV(data_key.data(), data_key.size(), null_iv, array_length(null_iv));
             m_dec.SetKeyWithIV(data_key.data(), data_key.size(), null_iv, array_length(null_iv));
             warn_if_key_not_random(data_key, __FILE__, __LINE__);
-            warn_if_key_not_random(meta_key, __FILE__, __LINE__);
         }
 
     protected:
@@ -389,6 +327,7 @@ namespace internal
         {
             if (length == 0)
                 return;
+
             check_block_number(block_number);
 
             auto buffer = make_unique_array<byte>(get_meta_size());
@@ -399,6 +338,27 @@ namespace internal
             {
                 generate_random(iv, get_iv_size());
             } while (is_all_zeros(iv, get_iv_size()));    // Null IVs are markers for sparse blocks
+
+            // 查询->插入or更新版本号
+            auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+            Key key(id().data(), block_number);
+            uint64_t version;
+            auto it = hashmap.find(key);
+            if (it != hashmap.end()) {
+                // 如果迭代器不等于 end()，说明找到了 key，则 v = v + 1，更新存入kv中
+                version = it->second + 1;
+                it->second = version;
+            } else {
+                // 否则，说明不存在该 key，则初始化 v 为 1，初次存入kv中
+                version = 1;
+                hashmap[key] = version;
+            }
+            // 拼接加密（vesion + data）
+            size_t resultSize = length + sizeof(uint64_t);
+            auto result = make_unique_array<byte>(resultSize);
+            concatenate(result.get(), static_cast<const byte*>(input), length, version);
+
+            // TODO 检查函数传递复制问题
             m_enc.EncryptAndAuthenticate(static_cast<byte*>(output),
                                          mac,
                                          get_mac_size(),
@@ -406,8 +366,8 @@ namespace internal
                                          get_iv_size(),
                                          id().data(),
                                          id().size(),
-                                         static_cast<const byte*>(input),
-                                         length);
+                                         static_cast<const byte*>(result.get()),
+                                         length + 8);
             auto pos = meta_position_for_iv(block_number);
             m_metastream.write(buffer.get(), pos, get_meta_size());
         }
@@ -434,7 +394,10 @@ namespace internal
                 memset(output, 0, length);
                 return;
             }
-            bool success = m_dec.DecryptAndVerify(static_cast<byte*>(output),
+
+            auto temp_output = make_unique_array<byte>(length);
+            // TODO block_number 似乎没有作为附加数据，同版本号的位置对调攻击成功
+            bool success = m_dec.DecryptAndVerify(static_cast<byte*>(temp_output.get()),
                                                   mac,
                                                   get_mac_size(),
                                                   iv,
@@ -443,8 +406,22 @@ namespace internal
                                                   id().size(),
                                                   static_cast<const byte*>(input),
                                                   length);
+
             if (m_check && !success)
                 throw MessageVerificationException(id(), block_number * m_block_size);
+
+            // read kv
+            auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+            Key key(id().data(), block_number);
+            uint64_t version;
+            std::memcpy(&version, static_cast<byte*>(temp_output.get()) + length - 8, sizeof(uint64_t));
+            auto it = hashmap.find(key);
+            if (it == hashmap.end() || it->second != version) {
+                throw IntegrityVerificationException(id(), block_number * m_block_size);
+            }
+
+            // 解密成功，复制解密后的数据到 output
+            std::memcpy(static_cast<byte*>(output), static_cast<byte*>(temp_output.get()), length - sizeof(uint64_t));
         }
 
         void adjust_logical_size(length_type length) override
@@ -549,9 +526,7 @@ std::pair<std::shared_ptr<CryptStream>, std::shared_ptr<HeaderBase>>
 make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
                          std::shared_ptr<StreamBase> meta_stream,
                          const key_type& data_key,
-                         const key_type& meta_key,
                          const id_type& id_,
-                         bool check,
                          unsigned block_size,
                          unsigned iv_size,
                          unsigned header_size)
@@ -559,9 +534,7 @@ make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
     auto stream = std::make_shared<internal::AESGCMCryptStream>(std::move(data_stream),
                                                                 std::move(meta_stream),
                                                                 data_key,
-                                                                meta_key,
                                                                 id_,
-                                                                check,
                                                                 block_size,
                                                                 iv_size,
                                                                 header_size);
