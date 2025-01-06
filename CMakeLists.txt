@@ -100,8 +100,6 @@ file(
     SOURCES
     sources/*.cpp
     sources/*.h
-    sources/integrity/*.cpp
-    sources/integrity/*.h
     ${EXTERNAL_DIR}/*.h
     ${EXTERNAL_DIR}/*.hpp
     ${EXTERNAL_DIR}/*.cpp

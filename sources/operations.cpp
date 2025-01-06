@@ -14,11 +14,7 @@
 #include <typeinfo>
 #include <utility>
 
-#include "integrity/integrity.h"
-#include <iomanip>
-
 #ifdef __APPLE__
-#include <sstream>
 #include <sys/xattr.h>
 #endif
 
@@ -257,35 +253,6 @@ namespace operations
         auto args = static_cast<MountOptions*>(fuse_get_context()->private_data);
         auto fs = new FileSystemContext(*args);
         TRACE_LOG("%s", __FUNCTION__);
-
-        // 加载 hashmap
-        using namespace integrity;
-        Integrity& integrity = Integrity::getInstance();
-        integrity.loadData();
-
-//        // 获取 hashmap 并打印内容
-//        auto& hashmap = integrity.getHashMap();
-//        INFO_LOG("Loaded hashmap with %zu entries:", hashmap.size());
-//        for (const auto& entry : hashmap) {
-//            // 格式化 Key 为十六进制字符串
-//            ::std::ostringstream oss;
-//            const byte* data = entry.first.getData();
-//            for (size_t i = 0; i < entry.first.size(); ++i) {
-//                oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[i]);
-//            }
-//            INFO_LOG("Key: %s, Value: %llu", oss.str().c_str(), entry.second);
-//        }
-//
-//        // 插入几个键值对
-//        byte key_data1[36], key_data2[36];
-//        std::fill(std::begin(key_data1), std::end(key_data1), 0x33); // Key 1 数据
-//        std::fill(std::begin(key_data2), std::end(key_data2), 0x44); // Key 2 数据
-//        Key key1(key_data1);
-//        Key key2(key_data2);
-//        hashmap[key1] = 1001;
-//        hashmap[key2] = 2002;
-//        INFO_LOG("Inserted two entries into hashmap: Key1 -> 1001, Key2 -> 2002");
-
         return fs;
     }
 
@@ -294,11 +261,6 @@ namespace operations
         auto fs = static_cast<FileSystemContext*>(data);
         TRACE_LOG("%s", __FUNCTION__);
         delete fs;
-
-        // 保存 hashmap
-        using namespace integrity;
-        Integrity& integrity = Integrity::getInstance();
-        integrity.saveData();
     }
 
     int statfs(const char* path, struct fuse_statvfs* fs_info)
