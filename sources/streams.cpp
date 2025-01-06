@@ -18,9 +18,6 @@
 #include <cryptopp/secblock.h>
 #include <cryptopp/sha.h>
 
-#include "integrity/integrity.h"
-#include "myutils.h"
-
 namespace securefs
 {
 namespace internal
@@ -101,12 +98,11 @@ std::shared_ptr<StreamBase> make_stream_hmac(const id_type& id_,
 
 length_type CryptStream::read_block(offset_type block_number, void* output)
 {
-    auto input = make_unique_array<byte>(m_block_size + 8);
-    auto rc = m_stream->read(input.get(), block_number * (m_block_size + 8), m_block_size + 8);
+    auto rc = m_stream->read(output, block_number * m_block_size, m_block_size);
     if (rc == 0)
         return 0;
-    decrypt(block_number, input.get(), output, rc);
-    return rc - 8;
+    decrypt(block_number, output, output, rc);
+    return rc;
 }
 
 length_type BlockBasedStream::read_block(offset_type block_number,
@@ -134,9 +130,9 @@ length_type BlockBasedStream::read_block(offset_type block_number,
 void CryptStream::write_block(offset_type block_number, const void* input, length_type length)
 {
     assert(length <= m_block_size);
-    auto buffer = make_unique_array<byte>(length + 8);
+    auto buffer = make_unique_array<byte>(length);
     encrypt(block_number, input, buffer.get(), length);
-    m_stream->write(buffer.get(), block_number * (m_block_size + 8), length + 8);
+    m_stream->write(buffer.get(), block_number * m_block_size, length);
 }
 
 void BlockBasedStream::read_then_write_block(offset_type block_number,
@@ -327,7 +323,6 @@ namespace internal
         {
             if (length == 0)
                 return;
-
             check_block_number(block_number);
 
             auto buffer = make_unique_array<byte>(get_meta_size());
@@ -338,27 +333,6 @@ namespace internal
             {
                 generate_random(iv, get_iv_size());
             } while (is_all_zeros(iv, get_iv_size()));    // Null IVs are markers for sparse blocks
-
-            // 查询->插入or更新版本号
-            auto& hashmap = integrity::Integrity::getInstance().getHashMap();
-            Key key(id().data(), block_number);
-            uint64_t version;
-            auto it = hashmap.find(key);
-            if (it != hashmap.end()) {
-                // 如果迭代器不等于 end()，说明找到了 key，则 v = v + 1，更新存入kv中
-                version = it->second + 1;
-                it->second = version;
-            } else {
-                // 否则，说明不存在该 key，则初始化 v 为 1，初次存入kv中
-                version = 1;
-                hashmap[key] = version;
-            }
-            // 拼接加密（vesion + data）
-            size_t resultSize = length + sizeof(uint64_t);
-            auto result = make_unique_array<byte>(resultSize);
-            concatenate(result.get(), static_cast<const byte*>(input), length, version);
-
-            // TODO 检查函数传递复制问题
             m_enc.EncryptAndAuthenticate(static_cast<byte*>(output),
                                          mac,
                                          get_mac_size(),
@@ -366,8 +340,8 @@ namespace internal
                                          get_iv_size(),
                                          id().data(),
                                          id().size(),
-                                         static_cast<const byte*>(result.get()),
-                                         length + 8);
+                                         static_cast<const byte*>(input),
+                                         length);
             auto pos = meta_position_for_iv(block_number);
             m_metastream.write(buffer.get(), pos, get_meta_size());
         }
@@ -394,10 +368,7 @@ namespace internal
                 memset(output, 0, length);
                 return;
             }
-
-            auto temp_output = make_unique_array<byte>(length);
-            // TODO block_number 似乎没有作为附加数据，同版本号的位置对调攻击成功
-            bool success = m_dec.DecryptAndVerify(static_cast<byte*>(temp_output.get()),
+            bool success = m_dec.DecryptAndVerify(static_cast<byte*>(output),
                                                   mac,
                                                   get_mac_size(),
                                                   iv,
@@ -406,22 +377,8 @@ namespace internal
                                                   id().size(),
                                                   static_cast<const byte*>(input),
                                                   length);
-
             if (m_check && !success)
                 throw MessageVerificationException(id(), block_number * m_block_size);
-
-            // read kv
-            auto& hashmap = integrity::Integrity::getInstance().getHashMap();
-            Key key(id().data(), block_number);
-            uint64_t version;
-            std::memcpy(&version, static_cast<byte*>(temp_output.get()) + length - 8, sizeof(uint64_t));
-            auto it = hashmap.find(key);
-            if (it == hashmap.end() || it->second != version) {
-                throw IntegrityVerificationException(id(), block_number * m_block_size);
-            }
-
-            // 解密成功，复制解密后的数据到 output
-            std::memcpy(static_cast<byte*>(output), static_cast<byte*>(temp_output.get()), length - sizeof(uint64_t));
         }
 
         void adjust_logical_size(length_type length) override

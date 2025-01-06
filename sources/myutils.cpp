@@ -137,15 +137,4 @@ void warn_if_key_not_random(const byte* key, size_t size, const char* file, int 
                  line);
     }
 }
-
-byte* concatenate(byte* result, const byte* array, size_t arraySize, uint64_t number) noexcept
-{
-    // 复制数组到结果数组的前半部分
-    std::memcpy(result, array, arraySize);
-
-    // 将 uint64_t 转换为字节并复制到结果数组的后半部分
-    std::memcpy(result + arraySize, &number, 8);
-
-    return result; // 返回拼接结果
-}
 }    // namespace securefs
