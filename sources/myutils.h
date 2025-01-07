@@ -266,4 +266,6 @@ void warn_if_key_not_random(const Container& c, const char* file, int line) noex
 {
     warn_if_key_not_random(c.data(), c.size(), file, line);
 }
+
+void concatenate(byte* result, const byte* addr1, size_t size1, const byte* addr2, size_t size2) noexcept;
 }    // namespace securefs

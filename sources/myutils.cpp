@@ -137,4 +137,11 @@ void warn_if_key_not_random(const byte* key, size_t size, const char* file, int 
                  line);
     }
 }
+
+void concatenate(byte* result, const byte* addr1, size_t size1, const byte* addr2, size_t size2) noexcept
+{
+    // 拷贝数据
+    std::memcpy(result, addr1, size1);
+    std::memcpy(result + size1, addr2, size2);
+}
 }    // namespace securefs

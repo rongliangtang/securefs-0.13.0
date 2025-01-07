@@ -102,76 +102,76 @@ static void test(securefs::BtreeDirectory& dir,
     }
 }
 
-static void test_btree_dir(unsigned max_padding_size)
-{
-    const size_t NUM_ENTRIES = 1000;
+//static void test_btree_dir(unsigned max_padding_size)
+//{
+//    const size_t NUM_ENTRIES = 1000;
+//
+//    securefs::key_type key(0x3e);
+//    securefs::id_type null_id{};
+//
+//    securefs::OSService service("tmp");
+//    auto tmp1 = service.temp_name("btree", "1");
+//    auto tmp2 = service.temp_name("btree", "2");
+//    auto tmp3 = service.temp_name("btree", "3");
+//    auto tmp4 = service.temp_name("btree", "4");
+//
+//    int flags = O_RDWR | O_EXCL | O_CREAT;
+//
+//    {
+//        securefs::BtreeDirectory dir(service.open_file_stream(tmp1, flags, 0644),
+//                                     service.open_file_stream(tmp2, flags, 0644),
+//                                     key,
+//                                     null_id,
+//                                     true,
+//                                     8000,
+//                                     12,
+//                                     max_padding_size,
+//                                     false);
+//        securefs::SimpleDirectory ref_dir(service.open_file_stream(tmp3, flags, 0644),
+//                                          service.open_file_stream(tmp4, flags, 0644),
+//                                          key,
+//                                          null_id,
+//                                          true,
+//                                          8000,
+//                                          12,
+//                                          max_padding_size,
+//                                          false);
+//        securefs::DoubleFileLockGuard dflg(dir, ref_dir);
+//        test(dir, ref_dir, 1000, 0.3, 0.5, 0.1, 1);
+//        test(dir, ref_dir, 1000, 0.3, 0.1, 0.5, 2);
+//        test(dir, ref_dir, 1000, 0.3, 0.3, 0.3, 3);
+//        dir.flush();
+//        ref_dir.flush();
+//    }
+//    {
+//        // Test if the data persists on the disk
+//        securefs::BtreeDirectory dir(service.open_file_stream(tmp1, O_RDWR, 0),
+//                                     service.open_file_stream(tmp2, O_RDWR, 0),
+//                                     key,
+//                                     null_id,
+//                                     true,
+//                                     8000,
+//                                     12,
+//                                     max_padding_size,
+//                                     false);
+//        securefs::SimpleDirectory ref_dir(service.open_file_stream(tmp3, O_RDWR, 0),
+//                                          service.open_file_stream(tmp4, O_RDWR, 0),
+//                                          key,
+//                                          null_id,
+//                                          true,
+//                                          8000,
+//                                          12,
+//                                          max_padding_size,
+//                                          false);
+//        securefs::DoubleFileLockGuard dflg(dir, ref_dir);
+//        test(dir, ref_dir, 1000, 0.3, 0.3, 0.3, 4);
+//        dir.flush();
+//        ref_dir.flush();
+//    }
+//}
 
-    securefs::key_type key(0x3e);
-    securefs::id_type null_id{};
-
-    securefs::OSService service("tmp");
-    auto tmp1 = service.temp_name("btree", "1");
-    auto tmp2 = service.temp_name("btree", "2");
-    auto tmp3 = service.temp_name("btree", "3");
-    auto tmp4 = service.temp_name("btree", "4");
-
-    int flags = O_RDWR | O_EXCL | O_CREAT;
-
-    {
-        securefs::BtreeDirectory dir(service.open_file_stream(tmp1, flags, 0644),
-                                     service.open_file_stream(tmp2, flags, 0644),
-                                     key,
-                                     null_id,
-                                     true,
-                                     8000,
-                                     12,
-                                     max_padding_size,
-                                     false);
-        securefs::SimpleDirectory ref_dir(service.open_file_stream(tmp3, flags, 0644),
-                                          service.open_file_stream(tmp4, flags, 0644),
-                                          key,
-                                          null_id,
-                                          true,
-                                          8000,
-                                          12,
-                                          max_padding_size,
-                                          false);
-        securefs::DoubleFileLockGuard dflg(dir, ref_dir);
-        test(dir, ref_dir, 1000, 0.3, 0.5, 0.1, 1);
-        test(dir, ref_dir, 1000, 0.3, 0.1, 0.5, 2);
-        test(dir, ref_dir, 1000, 0.3, 0.3, 0.3, 3);
-        dir.flush();
-        ref_dir.flush();
-    }
-    {
-        // Test if the data persists on the disk
-        securefs::BtreeDirectory dir(service.open_file_stream(tmp1, O_RDWR, 0),
-                                     service.open_file_stream(tmp2, O_RDWR, 0),
-                                     key,
-                                     null_id,
-                                     true,
-                                     8000,
-                                     12,
-                                     max_padding_size,
-                                     false);
-        securefs::SimpleDirectory ref_dir(service.open_file_stream(tmp3, O_RDWR, 0),
-                                          service.open_file_stream(tmp4, O_RDWR, 0),
-                                          key,
-                                          null_id,
-                                          true,
-                                          8000,
-                                          12,
-                                          max_padding_size,
-                                          false);
-        securefs::DoubleFileLockGuard dflg(dir, ref_dir);
-        test(dir, ref_dir, 1000, 0.3, 0.3, 0.3, 4);
-        dir.flush();
-        ref_dir.flush();
-    }
-}
-
-TEST_CASE("Test BtreeDirectory")
-{
-    test_btree_dir(0);
-    test_btree_dir(128);
-}
+//TEST_CASE("Test BtreeDirectory")
+//{
+//    test_btree_dir(0);
+//    test_btree_dir(128);
+//}

@@ -46,7 +46,8 @@ private:
         m_mtime THREAD_ANNOTATION_GUARDED_BY(*this), m_ctime THREAD_ANNOTATION_GUARDED_BY(*this),
         m_birthtime THREAD_ANNOTATION_GUARDED_BY(*this);
     std::shared_ptr<FileStream> m_data_stream THREAD_ANNOTATION_GUARDED_BY(*this),
-        m_meta_stream THREAD_ANNOTATION_GUARDED_BY(*this);
+        m_meta_stream THREAD_ANNOTATION_GUARDED_BY(*this),
+        m_int_stream THREAD_ANNOTATION_GUARDED_BY(*this);
     CryptoPP::GCM<CryptoPP::AES>::Encryption m_xattr_enc THREAD_ANNOTATION_GUARDED_BY(*this);
     CryptoPP::GCM<CryptoPP::AES>::Decryption m_xattr_dec THREAD_ANNOTATION_GUARDED_BY(*this);
     bool m_dirty THREAD_ANNOTATION_GUARDED_BY(*this);
@@ -131,6 +132,7 @@ public:
 public:
     explicit FileBase(std::shared_ptr<FileStream> data_stream,
                       std::shared_ptr<FileStream> meta_stream,
+                      std::shared_ptr<FileStream> int_stream,
                       const key_type& key_,
                       const id_type& id_,
                       bool check,

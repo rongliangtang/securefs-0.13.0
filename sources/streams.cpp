@@ -18,6 +18,8 @@
 #include <cryptopp/secblock.h>
 #include <cryptopp/sha.h>
 
+#include "myutils.h"
+
 namespace securefs
 {
 namespace internal
@@ -87,6 +89,54 @@ namespace internal
         }
 
         bool is_sparse() const noexcept override { return m_stream->is_sparse(); }
+    };
+
+    class IntStream final : public StreamBase
+    {
+    private:
+        std::shared_ptr<StreamBase> m_stream;
+
+    public:
+        explicit IntStream(std::shared_ptr<StreamBase> stream)
+            : m_stream(std::move(stream))
+        {
+            if (!m_stream)
+                throwVFSException(EFAULT);
+        }
+
+        ~IntStream()
+        {
+
+        }
+
+        void flush() override
+        {
+
+        }
+
+        length_type size() const override
+        {
+            return m_stream->size();;
+        }
+
+        length_type read(void* output, offset_type off, length_type len) override
+        {
+            return m_stream->read(output, off, len);
+        }
+
+        void write(const void* input, offset_type off, length_type len) override
+        {
+            m_stream->write(input, off, len);
+        }
+
+        void resize(length_type len) override
+        {
+            m_stream->resize(len);
+        }
+
+        bool is_sparse() const noexcept override {
+            return m_stream->is_sparse();
+        }
     };
 }    // namespace internal
 
@@ -276,6 +326,7 @@ namespace internal
         CryptoPP::GCM<CryptoPP::AES>::Encryption m_enc;
         CryptoPP::GCM<CryptoPP::AES>::Decryption m_dec;
         MetaStream m_metastream;
+        IntStream m_intstream;
         id_type m_id;
         unsigned m_iv_size, m_header_size;
         bool m_check;
@@ -298,6 +349,7 @@ namespace internal
     public:
         explicit AESGCMCryptStream(std::shared_ptr<StreamBase> data_stream,
                                    std::shared_ptr<StreamBase> meta_stream,
+                                   std::shared_ptr<StreamBase> int_stream,
                                    const key_type& data_key,
                                    const id_type& id_,
                                    unsigned block_size,
@@ -305,6 +357,7 @@ namespace internal
                                    unsigned header_size)
             : CryptStream(data_stream, block_size)
             , m_metastream( id_, meta_stream)
+            , m_intstream(int_stream)
             , m_id(id_)
             , m_iv_size(iv_size)
             , m_header_size(header_size)
@@ -333,13 +386,27 @@ namespace internal
             {
                 generate_random(iv, get_iv_size());
             } while (is_all_zeros(iv, get_iv_size()));    // Null IVs are markers for sparse blocks
+
+            auto version = make_unique_array<byte>(4);
+            auto pos_int = block_number * 4;
+            if (m_intstream.read(version.get(), pos_int, 4) != 4) {
+                *version.get() = 1;
+            } else {
+                *version.get() = *version.get() + 1;
+            }
+            m_intstream.write(version.get(), pos_int, 4);
+
+            auto add_size = id().size() + 4;
+            auto add = make_unique_array<byte>(add_size);
+            concatenate(add.get(), id().data(), id().size(), version.get(), 4);
+
             m_enc.EncryptAndAuthenticate(static_cast<byte*>(output),
                                          mac,
                                          get_mac_size(),
                                          iv,
                                          get_iv_size(),
-                                         id().data(),
-                                         id().size(),
+                                         add.get(),
+                                         add_size,
                                          static_cast<const byte*>(input),
                                          length);
             auto pos = meta_position_for_iv(block_number);
@@ -368,13 +435,24 @@ namespace internal
                 memset(output, 0, length);
                 return;
             }
+
+            auto version = make_unique_array<byte>(4);
+            auto pos_int = block_number * 4;
+            if (m_intstream.read(version.get(), pos_int, 4) != 4) {
+                throw IntegrityVerificationException(id(), block_number * m_block_size);
+            }
+
+            auto add_size = id().size() + 4;
+            auto add = make_unique_array<byte>(add_size);
+            concatenate(add.get(), id().data(), id().size(), version.get(), 4);
+
             bool success = m_dec.DecryptAndVerify(static_cast<byte*>(output),
                                                   mac,
                                                   get_mac_size(),
                                                   iv,
                                                   get_iv_size(),
-                                                  id().data(),
-                                                  id().size(),
+                                                  add.get(),
+                                                  add_size,
                                                   static_cast<const byte*>(input),
                                                   length);
             if (m_check && !success)
@@ -482,6 +560,7 @@ namespace internal
 std::pair<std::shared_ptr<CryptStream>, std::shared_ptr<HeaderBase>>
 make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
                          std::shared_ptr<StreamBase> meta_stream,
+                         std::shared_ptr<StreamBase> int_stream,
                          const key_type& data_key,
                          const id_type& id_,
                          unsigned block_size,
@@ -490,6 +569,7 @@ make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
 {
     auto stream = std::make_shared<internal::AESGCMCryptStream>(std::move(data_stream),
                                                                 std::move(meta_stream),
+                                                                std::move(int_stream),
                                                                 data_key,
                                                                 id_,
                                                                 block_size,

@@ -107,6 +107,7 @@ void FileBase::initialize_empty(uint32_t mode, uint32_t uid, uint32_t gid)
 
 FileBase::FileBase(std::shared_ptr<FileStream> data_stream,
                    std::shared_ptr<FileStream> meta_stream,
+                   std::shared_ptr<FileStream> int_stream,
                    const key_type& key_,
                    const id_type& id_,
                    bool check,
@@ -119,6 +120,7 @@ FileBase::FileBase(std::shared_ptr<FileStream> data_stream,
     , m_id(id_)
     , m_data_stream(data_stream)
     , m_meta_stream(meta_stream)
+    , m_int_stream(int_stream)
     , m_dirty(false)
     , m_check(check)
     , m_store_time(store_time)
@@ -139,6 +141,7 @@ FileBase::FileBase(std::shared_ptr<FileStream> data_stream,
     memcpy(meta_key.data(), generated_keys + KEY_LENGTH, KEY_LENGTH);
     auto crypt = make_cryptstream_aes_gcm(std::static_pointer_cast<StreamBase>(data_stream),
                                           std::static_pointer_cast<StreamBase>(meta_stream),
+                                          std::static_pointer_cast<StreamBase>(int_stream),
                                           data_key,
                                           id_,
                                           block_size,

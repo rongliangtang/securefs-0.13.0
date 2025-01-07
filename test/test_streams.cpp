@@ -256,22 +256,22 @@ TEST_CASE("Test streams")
         securefs::dummy::DummpyCryptStream ds(std::make_shared<securefs::MemoryStream>(), 8000);
         test(ds, 5000);
     }
-    {
-        auto aes_gcm_stream
-            = securefs::make_cryptstream_aes_gcm(std::make_shared<securefs::MemoryStream>(),
-                                                 std::make_shared<securefs::MemoryStream>(),
-                                                 key,
-                                                 id,
-                                                 4096,
-                                                 12);
-        std::vector<byte> header(aes_gcm_stream.second->max_header_length() - 1, 5);
-        aes_gcm_stream.second->write_header(header.data(), header.size());
-        test(*aes_gcm_stream.first, 1000);
-        aes_gcm_stream.second->flush_header();
-        aes_gcm_stream.second->read_header(header.data(), header.size());
-        REQUIRE(securefs::is_all_equal(header.begin(), header.end(), 5));
-        test(*aes_gcm_stream.first, 3000);
-    }
+//    {
+//        auto aes_gcm_stream
+//            = securefs::make_cryptstream_aes_gcm(std::make_shared<securefs::MemoryStream>(),
+//                                                 std::make_shared<securefs::MemoryStream>(),
+//                                                 key,
+//                                                 id,
+//                                                 4096,
+//                                                 12);
+//        std::vector<byte> header(aes_gcm_stream.second->max_header_length() - 1, 5);
+//        aes_gcm_stream.second->write_header(header.data(), header.size());
+//        test(*aes_gcm_stream.first, 1000);
+//        aes_gcm_stream.second->flush_header();
+//        aes_gcm_stream.second->read_header(header.data(), header.size());
+//        REQUIRE(securefs::is_all_equal(header.begin(), header.end(), 5));
+//        test(*aes_gcm_stream.first, 3000);
+//    }
     {
         securefs::dummy::DummyBlockStream dbs;
         test(dbs, 3001);

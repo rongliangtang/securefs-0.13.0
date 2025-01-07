@@ -162,6 +162,26 @@ public:
     }
 };
 
+class IntegrityVerificationException : public VerificationException
+{
+private:
+    id_type m_id;
+    offset_type m_off;
+
+public:
+    explicit IntegrityVerificationException(const id_type& id, offset_type off) : m_off(off)
+    {
+        memcpy(m_id.data(), id.data(), id.size());
+    }
+
+    std::string message() const override
+    {
+        return strprintf("Message for ID %s at offset %lld does not match the checksum",
+                         hexify(m_id.data(), m_id.size()).c_str(),
+                         (long long)m_off);
+    }
+};
+
 class XattrVerificationException : public VerificationException
 {
 private:

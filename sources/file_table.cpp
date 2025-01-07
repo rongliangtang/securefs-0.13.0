@@ -20,7 +20,7 @@
 namespace securefs
 {
 
-typedef std::pair<std::shared_ptr<FileStream>, std::shared_ptr<FileStream>> FileStreamPtrPair;
+typedef std::tuple<std::shared_ptr<FileStream>, std::shared_ptr<FileStream>, std::shared_ptr<FileStream>> FileStreamPtrTruple;
 class FileTableIO
 {
     DISABLE_COPY_MOVE(FileTableIO)
@@ -29,8 +29,8 @@ public:
     explicit FileTableIO() = default;
     virtual ~FileTableIO() = default;
 
-    virtual FileStreamPtrPair open(const id_type& id) = 0;
-    virtual FileStreamPtrPair create(const id_type& id) = 0;
+    virtual FileStreamPtrTruple open(const id_type& id) = 0;
+    virtual FileStreamPtrTruple create(const id_type& id) = 0;
     virtual void unlink(const id_type& id) noexcept = 0;
 };
 
@@ -38,6 +38,7 @@ class FileTableIOVersion1 : public FileTableIO
 {
 private:
     std::shared_ptr<const OSService> m_root;
+    std::shared_ptr<const OSService> i_root;
     bool m_readonly;
 
     static const size_t FIRST_LEVEL = 1, SECOND_LEVEL = 5;
@@ -46,7 +47,8 @@ private:
                                 std::string& first_level_dir,
                                 std::string& second_level_dir,
                                 std::string& full_filename,
-                                std::string& meta_filename)
+                                std::string& meta_filename,
+                                std::string& int_filename)
     {
         first_level_dir = securefs::hexify(id.data(), FIRST_LEVEL);
         second_level_dir
@@ -55,43 +57,54 @@ private:
             + securefs::hexify(id.data() + FIRST_LEVEL + SECOND_LEVEL,
                                id.size() - FIRST_LEVEL - SECOND_LEVEL);
         meta_filename = full_filename + ".meta";
+        int_filename = full_filename + ".int";
     }
 
 public:
     explicit FileTableIOVersion1(std::shared_ptr<const OSService> root, bool readonly)
         : m_root(std::move(root)), m_readonly(readonly)
     {
+        i_root = std::make_shared<OSService>("/home/ubuntu/tangrl/experiment/securefs/int");
     }
 
-    FileStreamPtrPair open(const id_type& id) override
+    FileStreamPtrTruple open(const id_type& id) override
     {
-        std::string first_level_dir, second_level_dir, filename, metaname;
-        calculate_paths(id, first_level_dir, second_level_dir, filename, metaname);
+        std::string first_level_dir, second_level_dir, filename, metaname, intname;
+        calculate_paths(id, first_level_dir, second_level_dir, filename, metaname, intname);
 
         int open_flags = m_readonly ? O_RDONLY : O_RDWR;
-        return std::make_pair(m_root->open_file_stream(filename, open_flags, 0),
-                              m_root->open_file_stream(metaname, open_flags, 0));
+        return std::make_tuple(m_root->open_file_stream(filename, open_flags, 0),
+                               m_root->open_file_stream(metaname, open_flags, 0),
+                               i_root->open_file_stream(intname, open_flags, 0));
     }
 
-    FileStreamPtrPair create(const id_type& id) override
+    FileStreamPtrTruple create(const id_type& id) override
     {
-        std::string first_level_dir, second_level_dir, filename, metaname;
-        calculate_paths(id, first_level_dir, second_level_dir, filename, metaname);
+        std::string first_level_dir, second_level_dir, filename, metaname, intname;
+        calculate_paths(id, first_level_dir, second_level_dir, filename, metaname, intname);
         m_root->ensure_directory(first_level_dir.c_str(), 0755);
         m_root->ensure_directory(second_level_dir.c_str(), 0755);
+
+        i_root->ensure_directory(first_level_dir.c_str(), 0755);
+        i_root->ensure_directory(second_level_dir.c_str(), 0755);
+
         int open_flags = O_RDWR | O_CREAT | O_EXCL;
-        return std::make_pair(m_root->open_file_stream(filename, open_flags, 0644),
-                              m_root->open_file_stream(metaname, open_flags, 0644));
+        return std::make_tuple(m_root->open_file_stream(filename, open_flags, 0644),
+                              m_root->open_file_stream(metaname, open_flags, 0644),
+                              i_root->open_file_stream(intname, open_flags, 0644));
     }
 
     void unlink(const id_type& id) noexcept override
     {
-        std::string first_level_dir, second_level_dir, filename, metaname;
-        calculate_paths(id, first_level_dir, second_level_dir, filename, metaname);
+        std::string first_level_dir, second_level_dir, filename, metaname, intname;
+        calculate_paths(id, first_level_dir, second_level_dir, filename, metaname, intname);
         m_root->remove_file_nothrow(filename);
         m_root->remove_file_nothrow(metaname);
+        i_root->remove_file_nothrow(intname);
         m_root->remove_directory_nothrow(second_level_dir);
         m_root->remove_directory_nothrow(second_level_dir);
+        i_root->remove_directory_nothrow(second_level_dir);
+        i_root->remove_directory_nothrow(second_level_dir);
     }
 };
 
@@ -104,7 +117,8 @@ private:
     static void calculate_paths(const securefs::id_type& id,
                                 std::string& dir,
                                 std::string& full_filename,
-                                std::string& meta_filename)
+                                std::string& meta_filename,
+                                std::string& int_filename)
     {
         dir = securefs::hexify(id.data(), 1);
         full_filename = dir + '/' + securefs::hexify(id.data() + 1, id.size() - 1);
@@ -117,32 +131,35 @@ public:
     {
     }
 
-    FileStreamPtrPair open(const id_type& id) override
+    FileStreamPtrTruple open(const id_type& id) override
     {
-        std::string dir, filename, metaname;
-        calculate_paths(id, dir, filename, metaname);
+        std::string dir, filename, metaname, intname;
+        calculate_paths(id, dir, filename, metaname, intname);
 
         int open_flags = m_readonly ? O_RDONLY : O_RDWR;
-        return std::make_pair(m_root->open_file_stream(filename, open_flags, 0),
-                              m_root->open_file_stream(metaname, open_flags, 0));
+        return std::make_tuple(m_root->open_file_stream(filename, open_flags, 0),
+                               m_root->open_file_stream(metaname, open_flags, 0),
+                               m_root->open_file_stream(intname, open_flags, 0));
     }
 
-    FileStreamPtrPair create(const id_type& id) override
+    FileStreamPtrTruple create(const id_type& id) override
     {
-        std::string dir, filename, metaname;
-        calculate_paths(id, dir, filename, metaname);
+        std::string dir, filename, metaname, intname;
+        calculate_paths(id, dir, filename, metaname, intname);
         m_root->ensure_directory(dir, 0755);
         int open_flags = O_RDWR | O_CREAT | O_EXCL;
-        return std::make_pair(m_root->open_file_stream(filename, open_flags, 0644),
-                              m_root->open_file_stream(metaname, open_flags, 0644));
+        return std::make_tuple(m_root->open_file_stream(filename, open_flags, 0644),
+                               m_root->open_file_stream(metaname, open_flags, 0644),
+                               m_root->open_file_stream(intname, open_flags, 0644));
     }
 
     void unlink(const id_type& id) noexcept override
     {
-        std::string dir, filename, metaname;
-        calculate_paths(id, dir, filename, metaname);
+        std::string dir, filename, metaname, intname;
+        calculate_paths(id, dir, filename, metaname, intname);
         m_root->remove_file_nothrow(filename);
         m_root->remove_file_nothrow(metaname);
+        m_root->remove_file_nothrow(intname);
         m_root->remove_directory_nothrow(dir);
     }
 };
@@ -201,11 +218,12 @@ FileBase* FileTableImpl::open_as(const id_type& id, int type)
         }
     }
 
-    std::shared_ptr<FileStream> data_fd, meta_fd;
-    std::tie(data_fd, meta_fd) = m_fio->open(id);
+    std::shared_ptr<FileStream> data_fd, meta_fd, int_fd;
+    std::tie(data_fd, meta_fd, int_fd) = m_fio->open(id);
     auto fb = btree_make_file_from_type(type,
                                         data_fd,
                                         meta_fd,
+                                        int_fd,
                                         m_master_key,
                                         id,
                                         is_auth_enabled(),
@@ -228,11 +246,12 @@ FileBase* FileTableImpl::create_as(const id_type& id, int type)
     if (m_files.find(id) != m_files.end())
         throwVFSException(EEXIST);
 
-    std::shared_ptr<FileStream> data_fd, meta_fd;
-    std::tie(data_fd, meta_fd) = m_fio->create(id);
+    std::shared_ptr<FileStream> data_fd, meta_fd, int_fd;
+    std::tie(data_fd, meta_fd, int_fd) = m_fio->create(id);
     auto fb = btree_make_file_from_type(type,
                                         data_fd,
                                         meta_fd,
+                                        int_fd,
                                         m_master_key,
                                         id,
                                         is_auth_enabled(),

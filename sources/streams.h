@@ -166,6 +166,7 @@ public:
 std::pair<std::shared_ptr<CryptStream>, std::shared_ptr<HeaderBase>>
 make_cryptstream_aes_gcm(std::shared_ptr<StreamBase> data_stream,
                          std::shared_ptr<StreamBase> meta_stream,
+                         std::shared_ptr<StreamBase> int_stream,
                          const key_type& data_key,
                          const id_type& id_,
                          unsigned block_size,
