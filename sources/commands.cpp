@@ -43,6 +43,7 @@ namespace
 {
 
 const char* const CONFIG_FILE_NAME = ".securefs.json";
+const char* const DIRID_FILE_NAME = ".securefs.dirid";
 const unsigned MIN_ITERATIONS = 20000;
 const unsigned MIN_DERIVE_SECONDS = 1;
 const size_t CONFIG_IV_LENGTH = 32, CONFIG_MAC_LENGTH = 16;
@@ -667,6 +668,10 @@ protected:
         return config_path.isSet() ? config_path.getValue()
                                    : data_dir.getValue() + PATH_SEPARATOR_CHAR + CONFIG_FILE_NAME;
     }
+    std::string get_root_dirid_path()
+    {
+        return data_dir.getValue() + PATH_SEPARATOR_CHAR + DIRID_FILE_NAME;
+    }
 };
 
 class _SinglePasswordCommandBase : public _DataDirCommandBase
@@ -842,6 +847,14 @@ public:
             root_fp.set_nlink(1);
             root_fp.flush();
         }
+
+        // 在挂载根目录下，创建 securefs.dirid 文件，存放这个目录的 id（16字节）
+        auto dirid_stream
+            = open_config_stream(get_root_dirid_path(), O_WRONLY | O_CREAT | O_EXCL);
+        CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+        generate_random(id.data(), id.size());
+        dirid_stream->write(id.data(), 0, id.size());
+
         return 0;
     }
 

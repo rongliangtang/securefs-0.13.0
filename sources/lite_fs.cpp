@@ -12,6 +12,8 @@ namespace securefs
 {
 namespace lite
 {
+    const std::string DIRID_FILE_NAME = ".securefs.dirid";
+    const std::string PATH_SEPARATOR_STRING = "/";
 
     File::~File() {}
 
@@ -31,8 +33,7 @@ namespace lite
                            unsigned iv_size,
                            unsigned max_padding_size,
                            unsigned flags)
-        : m_name_encryptor(name_key.data(), name_key.size())
-        , m_content_key(content_key)
+        : m_content_key(content_key)
         , m_padding_aes(padding_key.data(), padding_key.size())
         , m_root(std::move(root))
         , m_block_size(block_size)
@@ -41,6 +42,8 @@ namespace lite
         , m_flags(flags)
     {
         byte null_iv[12] = {0};
+        m_name_encryptor.SetKeyWithIV(name_key.data(), name_key.size(), null_iv, sizeof(null_iv));
+        m_name_decryptor.SetKeyWithIV(name_key.data(), name_key.size(), null_iv, sizeof(null_iv));
         m_xattr_enc.SetKeyWithIV(xattr_key.data(), xattr_key.size(), null_iv, sizeof(null_iv));
         m_xattr_dec.SetKeyWithIV(xattr_key.data(), xattr_key.size(), null_iv, sizeof(null_iv));
     }
@@ -53,7 +56,7 @@ namespace lite
         return strprintf("Invalid filename \"%s\"", m_filename.c_str());
     }
 
-    std::string encrypt_path(AES_SIV& encryptor, StringRef path)
+    std::string encrypt_path(std::shared_ptr<const securefs::OSService> root, CryptoPP::GCM<CryptoPP::AES>::Encryption encryptor, StringRef path)
     {
         byte buffer[2032];
         std::string result;
@@ -71,9 +74,29 @@ namespace lite
                     size_t slice_size = i - last_nonseparator_index;
                     if (slice_size > 2000)
                         throwVFSException(ENAMETOOLONG);
-                    encryptor.encrypt_and_authenticate(
-                        slice, slice_size, nullptr, 0, buffer + AES_SIV::IV_SIZE, buffer);
-                    base32_encode(buffer, slice_size + AES_SIV::IV_SIZE, encoded_part);
+
+                    // 从当前result中取出当前目录 id
+                    // result + .securefs.dirid
+                    std::string dirid_str = result.substr(1) + DIRID_FILE_NAME;
+                    StringRef dirid_path(dirid_str);
+                    auto dirid_file = root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+                    CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+                    dirid_file->read(id.data(), 0, id.size());
+
+                    // 加密并拼接加密文件名
+                    encryptor.EncryptAndAuthenticate(buffer,
+                                                     buffer + 12 + slice_size,
+                                                     16,
+                                                     id.data(),
+                                                     12,
+                                                     nullptr,
+                                                     0,
+                                                     reinterpret_cast<const byte*>(slice),
+                                                     slice_size);
+                    std::memcpy(buffer + slice_size, id.data(), 12);
+                    base32_encode(buffer, slice_size + 12 + 16, encoded_part);
+
+                    // 添加到result中
                     result.append(encoded_part);
                 }
                 if (i < path.size())
@@ -84,7 +107,7 @@ namespace lite
         return result;
     }
 
-    std::string decrypt_path(AES_SIV& decryptor, StringRef path)
+    std::string decrypt_path(std::shared_ptr<const securefs::OSService> root, CryptoPP::GCM<CryptoPP::AES>::Decryption decryptor, StringRef path)
     {
         byte string_buffer[2032];
         std::string result, decoded_part;
@@ -104,17 +127,23 @@ namespace lite
                     if (decoded_part.size() >= sizeof(string_buffer))
                         throwVFSException(ENAMETOOLONG);
 
-                    bool success
-                        = decryptor.decrypt_and_verify(&decoded_part[AES_SIV::IV_SIZE],
-                                                       decoded_part.size() - AES_SIV::IV_SIZE,
-                                                       nullptr,
-                                                       0,
-                                                       string_buffer,
-                                                       &decoded_part[0]);
+                    int data_size = decoded_part.size() - 28;
+                    int mac_pos = decoded_part.size() - 16;
+                    // 将 decoded_part 进行解密，将解密结果存入到 string_buffer 中，大小为 decoded_part.size()-32
+                    bool success = decryptor.DecryptAndVerify(string_buffer,
+                                                    reinterpret_cast<const byte*>(&decoded_part[0]) + mac_pos,
+                                                    16,
+                                                    reinterpret_cast<const byte*>(&decoded_part[0] ) + data_size,
+                                                    12,
+                                                    nullptr,
+                                                    0,
+                                                    reinterpret_cast<const byte*>(&decoded_part[0]),
+                                                    data_size);
+
                     if (!success)
                         throw InvalidFilenameException(path.to_string());
                     result.append((const char*)string_buffer,
-                                  decoded_part.size() - AES_SIV::IV_SIZE);
+                                  data_size);
                 }
                 if (i < path.size())
                     result.push_back('/');
@@ -144,6 +173,7 @@ namespace lite
         else
         {
             std::string str = lite::encrypt_path(
+                m_root,
                 m_name_encryptor,
                 transform(path, m_flags & kOptionCaseFoldFileName, m_flags & kOptionNFCFileName)
                     .get());
@@ -215,7 +245,7 @@ namespace lite
             // Resize to actual size
             buffer.resize(static_cast<size_t>(link_size));
 
-            auto resolved = decrypt_path(m_name_encryptor, buffer);
+            auto resolved = decrypt_path(m_root, m_name_decryptor, buffer);
             buf->st_size = resolved.size();
             break;
         }
@@ -261,12 +291,26 @@ namespace lite
 
     void FileSystem::mkdir(StringRef path, fuse_mode_t mode)
     {
-        m_root->mkdir(translate_path(path, false), mode);
+        std::string encrypt_path = translate_path(path, false);
+        m_root->mkdir(encrypt_path, mode);
+        // 在新创建的目录中创建 securefs.dirid 文件，存放这个目录的 id（16字节）
+        std::string dirid_str = encrypt_path + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
+        StringRef dirid_path(dirid_str);
+        auto dirid_file = m_root->open_file_stream(dirid_path, O_RDWR | O_CREAT, S_IRWXU);
+        CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+        generate_random(id.data(), id.size());
+        dirid_file->write(id.data(), 0, id.size());
     }
 
     void FileSystem::rmdir(StringRef path)
     {
-        m_root->remove_directory(translate_path(path, false));
+        // 先删除底层存储中的 .securefs.dirid 文件
+        std::string encrypt_path = translate_path(path, false);
+        std::string dirid_str = encrypt_path + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
+        StringRef dirid_path(dirid_str);
+        m_root->remove_file(dirid_path);
+        // 再删除目录
+        m_root->remove_directory(encrypt_path);
     }
 
     void FileSystem::rename(StringRef from, StringRef to)
@@ -300,7 +344,7 @@ namespace lite
         auto underbuf = securefs::make_unique_array<char>(max_size);
         memset(underbuf.get(), 0, max_size);
         m_root->readlink(translate_path(path, false), underbuf.get(), max_size - 1);
-        std::string resolved = decrypt_path(m_name_encryptor, underbuf.get());
+        std::string resolved = decrypt_path(m_root, m_name_decryptor, underbuf.get());
         size_t copy_size = std::min(resolved.size(), size - 1);
         memcpy(buf, resolved.data(), copy_size);
         buf[copy_size] = '\0';
@@ -333,18 +377,21 @@ namespace lite
         std::string m_path;
         std::unique_ptr<DirectoryTraverser>
             m_underlying_traverser THREAD_ANNOTATION_GUARDED_BY(*this);
-        AES_SIV m_name_encryptor THREAD_ANNOTATION_GUARDED_BY(*this);
+        CryptoPP::GCM<CryptoPP::AES>::Encryption m_name_encryptor THREAD_ANNOTATION_GUARDED_BY(*this);
+        CryptoPP::GCM<CryptoPP::AES>::Decryption m_name_decryptor THREAD_ANNOTATION_GUARDED_BY(*this);
         unsigned m_block_size, m_iv_size;
 
     public:
         explicit LiteDirectory(std::string path,
                                std::unique_ptr<DirectoryTraverser> underlying_traverser,
-                               const AES_SIV& name_encryptor,
+                               const CryptoPP::GCM<CryptoPP::AES>::Encryption name_encryptor,
+                               const CryptoPP::GCM<CryptoPP::AES>::Decryption name_decryptor,
                                unsigned block_size,
                                unsigned iv_size)
             : m_path(std::move(path))
             , m_underlying_traverser(std::move(underlying_traverser))
             , m_name_encryptor(name_encryptor)
+            , m_name_decryptor(name_decryptor)
             , m_block_size(block_size)
             , m_iv_size(iv_size)
         {
@@ -387,14 +434,22 @@ namespace lite
                         WARN_LOG("Skipping too small encrypted filename %s", under_name.c_str());
                         continue;
                     }
-                    name->assign(decoded_bytes.size() - AES_SIV::IV_SIZE, '\0');
-                    bool success
-                        = m_name_encryptor.decrypt_and_verify(&decoded_bytes[AES_SIV::IV_SIZE],
-                                                              name->size(),
+
+                    int data_size = decoded_bytes.size() - 28;
+                    int mac_pos = decoded_bytes.size() - 16;
+
+                    name->assign(data_size, '\0');
+
+                    bool success = m_name_decryptor.DecryptAndVerify(reinterpret_cast<byte*>(&(*name)[0]),
+                                                              reinterpret_cast<const byte*>(&decoded_bytes[0]) + mac_pos,
+                                                              16,
+                                                              reinterpret_cast<const byte*>(&decoded_bytes[0]) + data_size,
+                                                              12,
                                                               nullptr,
                                                               0,
-                                                              &(*name)[0],
-                                                              &decoded_bytes[0]);
+                                                              reinterpret_cast<const byte*>(&decoded_bytes[0]),
+                                                              data_size);
+
                     if (!success)
                     {
                         WARN_LOG("Skipping filename %s (decrypted to %s) since it fails "
@@ -427,6 +482,7 @@ namespace lite
             path.to_string(),
             m_root->create_traverser(translate_path(path, false)),
             this->m_name_encryptor,
+            this->m_name_decryptor,
             m_block_size,
             m_iv_size);
     }
