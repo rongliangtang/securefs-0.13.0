@@ -85,7 +85,7 @@ namespace lite
 
                     // 加密并拼接加密文件名
                     encryptor.EncryptAndAuthenticate(buffer,
-                                                     buffer + 12 + slice_size,
+                                                     buffer + slice_size,
                                                      16,
                                                      id.data(),
                                                      12,
@@ -93,8 +93,7 @@ namespace lite
                                                      0,
                                                      reinterpret_cast<const byte*>(slice),
                                                      slice_size);
-                    std::memcpy(buffer + slice_size, id.data(), 12);
-                    base32_encode(buffer, slice_size + 12 + 16, encoded_part);
+                    base32_encode(buffer, slice_size + 16, encoded_part);
 
                     // 添加到result中
                     result.append(encoded_part);
@@ -127,13 +126,21 @@ namespace lite
                     if (decoded_part.size() >= sizeof(string_buffer))
                         throwVFSException(ENAMETOOLONG);
 
-                    int data_size = decoded_part.size() - 28;
-                    int mac_pos = decoded_part.size() - 16;
+                    // 从当前path中取出当前目录 id
+                    // TODO 这部分代码没有调试
+                    std::string  temp = path.substr(0, last_nonseparator_index - 1);
+                    std::string dirid_str = temp.empty() ? DIRID_FILE_NAME : temp.substr(1) + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
+                    StringRef dirid_path(dirid_str);
+                    auto dirid_file = root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+                    CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+                    dirid_file->read(id.data(), 0, id.size());
+
+                    int data_size = decoded_part.size() - 16;
                     // 将 decoded_part 进行解密，将解密结果存入到 string_buffer 中，大小为 decoded_part.size()-32
                     bool success = decryptor.DecryptAndVerify(string_buffer,
-                                                    reinterpret_cast<const byte*>(&decoded_part[0]) + mac_pos,
+                                                    reinterpret_cast<const byte*>(&decoded_part[0]) + data_size,
                                                     16,
-                                                    reinterpret_cast<const byte*>(&decoded_part[0] ) + data_size,
+                                                    id.data(),
                                                     12,
                                                     nullptr,
                                                     0,
@@ -375,21 +382,28 @@ namespace lite
     {
     private:
         std::string m_path;
+        std::shared_ptr<const securefs::OSService> m_root;
         std::unique_ptr<DirectoryTraverser>
             m_underlying_traverser THREAD_ANNOTATION_GUARDED_BY(*this);
+        CryptoPP::FixedSizeAlignedSecBlock<byte, 16> m_id;
         CryptoPP::GCM<CryptoPP::AES>::Encryption m_name_encryptor THREAD_ANNOTATION_GUARDED_BY(*this);
         CryptoPP::GCM<CryptoPP::AES>::Decryption m_name_decryptor THREAD_ANNOTATION_GUARDED_BY(*this);
         unsigned m_block_size, m_iv_size;
 
+
     public:
         explicit LiteDirectory(std::string path,
+                               std::shared_ptr<const securefs::OSService> root,
                                std::unique_ptr<DirectoryTraverser> underlying_traverser,
+                               CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id,
                                const CryptoPP::GCM<CryptoPP::AES>::Encryption name_encryptor,
                                const CryptoPP::GCM<CryptoPP::AES>::Decryption name_decryptor,
                                unsigned block_size,
                                unsigned iv_size)
             : m_path(std::move(path))
+            , m_root(root)
             , m_underlying_traverser(std::move(underlying_traverser))
+            , m_id(std::move(id))
             , m_name_encryptor(name_encryptor)
             , m_name_decryptor(name_decryptor)
             , m_block_size(block_size)
@@ -435,15 +449,14 @@ namespace lite
                         continue;
                     }
 
-                    int data_size = decoded_bytes.size() - 28;
-                    int mac_pos = decoded_bytes.size() - 16;
+                    int data_size = decoded_bytes.size() - 16;
 
                     name->assign(data_size, '\0');
 
                     bool success = m_name_decryptor.DecryptAndVerify(reinterpret_cast<byte*>(&(*name)[0]),
-                                                              reinterpret_cast<const byte*>(&decoded_bytes[0]) + mac_pos,
-                                                              16,
                                                               reinterpret_cast<const byte*>(&decoded_bytes[0]) + data_size,
+                                                              16,
+                                                              m_id.data(),
                                                               12,
                                                               nullptr,
                                                               0,
@@ -478,9 +491,25 @@ namespace lite
     {
         if (path.empty())
             throwVFSException(EINVAL);
+
+        std::string encrypt_path = translate_path(path, false);
+        std::string dirid_str;
+        if (encrypt_path == ".") {
+            dirid_str = DIRID_FILE_NAME;
+        }
+        else {
+            dirid_str = encrypt_path + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
+        }
+        StringRef dirid_path(dirid_str);
+        auto dirid_file = m_root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+        CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+        dirid_file->read(id.data(), 0, id.size());
+
         return securefs::make_unique<LiteDirectory>(
             path.to_string(),
-            m_root->create_traverser(translate_path(path, false)),
+            m_root,
+            m_root->create_traverser(encrypt_path),
+            id,
             this->m_name_encryptor,
             this->m_name_decryptor,
             m_block_size,
