@@ -189,6 +189,12 @@ public:
     std::string message() const override { return "File content has invalid checksum"; }
 };
 
+class LiteIntegrityVerificationException : public VerificationException
+{
+public:
+    std::string message() const override { return "Integrity Verification fails"; }
+};
+
 class StreamTooLongException : public ExceptionBase
 {
 private:

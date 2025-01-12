@@ -46,6 +46,7 @@ namespace lite
         m_name_decryptor.SetKeyWithIV(name_key.data(), name_key.size(), null_iv, sizeof(null_iv));
         m_xattr_enc.SetKeyWithIV(xattr_key.data(), xattr_key.size(), null_iv, sizeof(null_iv));
         m_xattr_dec.SetKeyWithIV(xattr_key.data(), xattr_key.size(), null_iv, sizeof(null_iv));
+        i_root = std::make_shared<OSService>("/Users/liang/Downloads/int");
     }
 
     FileSystem::~FileSystem() {}
@@ -214,6 +215,7 @@ namespace lite
         }
         auto file_stream = m_root->open_file_stream(translate_path(path, false), flags, mode);
         AutoClosedFile fp(new File(file_stream,
+                                   i_root,
                                    m_content_key,
                                    m_block_size,
                                    m_iv_size,
@@ -272,6 +274,7 @@ namespace lite
                     {
                         auto fs = m_root->open_file_stream(enc_path, O_RDONLY, 0);
                         AESGCMCryptStream stream(std::move(fs),
+                                                 i_root,
                                                  m_content_key,
                                                  m_block_size,
                                                  m_iv_size,
@@ -322,7 +325,28 @@ namespace lite
 
     void FileSystem::rename(StringRef from, StringRef to)
     {
-        m_root->rename(translate_path(from, false), translate_path(to, false));
+        // 如果 to 存在则要删除对应的 int 文件
+        // TODO 这里后面可以优化为从hashmap里面取出id
+        // TODO macos 中可能 textedit 使用了 map，导致新创建的临时文件的版本号文件没有内容，导致报错（还没有找到具体原因）
+        std::string encrypt_path = translate_path(to, false);
+
+        struct fuse_stat fstbuf;
+        if (m_root->stat(encrypt_path, &fstbuf) && S_ISREG(fstbuf.st_mode)){
+            auto file_stream = m_root->open_file_stream(encrypt_path, O_RDWR, S_IRWXU);
+            CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+            auto rc = file_stream->read(id.data(), 0, id.size());
+            if (rc != id.size()) {
+                throwInvalidArgumentException("Underlying stream has invalid ID size");
+            }
+            std::string int_path;
+            base32_encode(id.data(), id.size(), int_path);
+            // 先重命名，再删除 id，否则可能导致读取id失败
+            m_root->rename(translate_path(from, false), encrypt_path);
+            i_root->remove_file(int_path);
+        }
+        else {
+            m_root->rename(translate_path(from, false), encrypt_path);
+        }
     }
 
     void FileSystem::chmod(StringRef path, fuse_mode_t mode)
@@ -369,7 +393,21 @@ namespace lite
         m_root->utimens(translate_path(path, false), ts);
     }
 
-    void FileSystem::unlink(StringRef path) { m_root->remove_file(translate_path(path, false)); }
+    void FileSystem::unlink(StringRef path) {
+        std::string encrypt_path = translate_path(path, false);
+        // TODO 这里后面可以优化为从hashmap里面取出id
+        CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+        auto file_stream = m_root->open_file_stream(encrypt_path, O_RDWR, S_IRWXU);
+        auto rc = file_stream->read(id.data(), 0, id.size());
+        if (rc != id.size()) {
+            throwInvalidArgumentException("Underlying stream has invalid ID size");
+        }
+        std::string int_path;
+        base32_encode(id.data(), id.size(), int_path);
+
+        m_root->remove_file(encrypt_path);
+        i_root->remove_file(int_path);
+    }
 
     void FileSystem::link(StringRef src, StringRef dest)
     {

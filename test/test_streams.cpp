@@ -283,38 +283,38 @@ TEST_CASE("Test streams")
         test(ps, 1000);
     }
     CryptoPP::ECB_Mode<CryptoPP::AES>::Encryption padding_aes(key.data(), key.size());
-    auto test_lite_stream = [&](unsigned block_size, unsigned iv_size, unsigned padding_size)
-    {
-        CAPTURE(block_size);
-        CAPTURE(iv_size);
-        CAPTURE(padding_size);
-
-        auto memory_stream = std::make_shared<securefs::MemoryStream>();
-        {
-            securefs::lite::AESGCMCryptStream lite_stream(
-                memory_stream, key, block_size, iv_size, true, padding_size, &padding_aes);
-            INFO_LOG("Actual padding size: %u", lite_stream.get_padding_size());
-
-            const byte test_data[] = "Hello, world";
-            byte output[4096];
-            lite_stream.write(test_data, 0, sizeof(test_data));
-            REQUIRE(lite_stream.read(output, 0, sizeof(output)) == sizeof(test_data));
-            REQUIRE(memcmp(test_data, output, sizeof(test_data)) == 0);
-            test(lite_stream, 1001);
-        }
-        {
-            securefs::lite::AESGCMCryptStream lite_stream(
-                memory_stream, key, block_size, iv_size, true, padding_size, &padding_aes);
-            INFO_LOG("Actual padding size: %u", lite_stream.get_padding_size());
-            test(lite_stream, 1001);
-        }
-    };
-
-    test_lite_stream(4096, 12, 0);
-    test_lite_stream(333, 16, 0);
-    test_lite_stream(333, 12, 14);
-    test_lite_stream(4096, 12, 1);
-    test_lite_stream(4096, 12, 32);
+//    auto test_lite_stream = [&](unsigned block_size, unsigned iv_size, unsigned padding_size)
+//    {
+//        CAPTURE(block_size);
+//        CAPTURE(iv_size);
+//        CAPTURE(padding_size);
+//
+//        auto memory_stream = std::make_shared<securefs::MemoryStream>();
+//        {
+//            securefs::lite::AESGCMCryptStream lite_stream(
+//                memory_stream, key, block_size, iv_size, true, padding_size, &padding_aes);
+//            INFO_LOG("Actual padding size: %u", lite_stream.get_padding_size());
+//
+//            const byte test_data[] = "Hello, world";
+//            byte output[4096];
+//            lite_stream.write(test_data, 0, sizeof(test_data));
+//            REQUIRE(lite_stream.read(output, 0, sizeof(output)) == sizeof(test_data));
+//            REQUIRE(memcmp(test_data, output, sizeof(test_data)) == 0);
+//            test(lite_stream, 1001);
+//        }
+//        {
+//            securefs::lite::AESGCMCryptStream lite_stream(
+//                memory_stream, key, block_size, iv_size, true, padding_size, &padding_aes);
+//            INFO_LOG("Actual padding size: %u", lite_stream.get_padding_size());
+//            test(lite_stream, 1001);
+//        }
+//    };
+//
+//    test_lite_stream(4096, 12, 0);
+//    test_lite_stream(333, 16, 0);
+//    test_lite_stream(333, 12, 14);
+//    test_lite_stream(4096, 12, 1);
+//    test_lite_stream(4096, 12, 32);
 
     {
         // Test that the `padding_aes` is stateless

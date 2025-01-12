@@ -1,5 +1,6 @@
 #pragma once
 
+#include "platform.h"
 #include "streams.h"
 
 #include <cryptopp/aes.h>
@@ -24,6 +25,8 @@ namespace lite
         CryptoPP::GCM<CryptoPP::AES>::Encryption m_encryptor;
         CryptoPP::GCM<CryptoPP::AES>::Decryption m_decryptor;
         std::shared_ptr<StreamBase> m_stream;
+        std::shared_ptr<StreamBase> i_stream;
+        std::shared_ptr<const securefs::OSService> i_root;
         std::unique_ptr<byte[]> m_buffer, m_auxiliary;
         unsigned m_iv_size, m_padding_size;
         bool m_check;
@@ -55,6 +58,7 @@ namespace lite
 
     public:
         explicit AESGCMCryptStream(std::shared_ptr<StreamBase> stream,
+                                   std::shared_ptr<const securefs::OSService> root,
                                    const key_type& master_key,
                                    unsigned block_size = 4096,
                                    unsigned iv_size = 12,

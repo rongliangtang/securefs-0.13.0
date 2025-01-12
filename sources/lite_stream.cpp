@@ -35,6 +35,7 @@ namespace lite
     std::string CorruptedStreamException::message() const { return "Stream is corrupted"; }
 
     AESGCMCryptStream::AESGCMCryptStream(std::shared_ptr<StreamBase> stream,
+                                         std::shared_ptr<const securefs::OSService> root,
                                          const key_type& master_key,
                                          unsigned block_size,
                                          unsigned iv_size,
@@ -43,6 +44,7 @@ namespace lite
                                          CryptoPP::ECB_Mode<CryptoPP::AES>::Encryption* padding_aes)
         : BlockBasedStream(block_size)
         , m_stream(std::move(stream))
+        , i_root(root)
         , m_iv_size(iv_size)
         , m_padding_size(0)
         , m_check(check)
@@ -59,12 +61,13 @@ namespace lite
         CryptoPP::FixedSizeAlignedSecBlock<byte, get_id_size()> id, session_key;
         auto rc = m_stream->read(id.data(), 0, id.size());
 
+        // 创建文件
         if (rc == 0)
         {
             generate_random(id.data(), id.size());
             m_stream->write(id.data(), 0, id.size());
             m_padding_size = compute_padding(max_padding_size, padding_aes, id.data(), id.size());
-            m_auxiliary.reset(new byte[sizeof(std::uint32_t) + m_padding_size]);
+            m_auxiliary.reset(new byte[sizeof(std::uint32_t) + sizeof(std::uint32_t) + m_padding_size]);
             if (m_padding_size)
             {
                 generate_random(m_auxiliary.get(), sizeof(std::uint32_t) + m_padding_size);
@@ -79,13 +82,17 @@ namespace lite
         else
         {
             m_padding_size = compute_padding(max_padding_size, padding_aes, id.data(), id.size());
-            m_auxiliary.reset(new byte[sizeof(std::uint32_t) + m_padding_size]);
+            m_auxiliary.reset(new byte[sizeof(std::uint32_t) + sizeof(std::uint32_t) + m_padding_size]);
             if (m_padding_size
                 && m_stream->read(
                        m_auxiliary.get() + sizeof(std::uint32_t), id.size(), m_padding_size)
                     != m_padding_size)
                 throwInvalidArgumentException("Invalid padding in the underlying file");
         }
+
+        std::string int_path;
+        base32_encode(id.data(), id.size(), int_path);
+        i_stream = i_root->open_file_stream(int_path, O_RDWR | O_CREAT, S_IRWXU);
 
         if (max_padding_size > 0)
         {
@@ -137,13 +144,20 @@ namespace lite
 
         to_little_endian(static_cast<std::uint32_t>(block_number), m_auxiliary.get());
 
+        auto version = make_unique_array<byte>(4);
+        auto pos_int = block_number * 4;
+        if (i_stream->read(version.get(), pos_int, 4) != 4) {
+            throw LiteIntegrityVerificationException();
+        }
+        std::memcpy(m_auxiliary.get() + sizeof(std::uint32_t), version.get(), sizeof(std::uint32_t));
+
         bool success = m_decryptor.DecryptAndVerify(static_cast<byte*>(output),
                                                     m_buffer.get() + rc - get_mac_size(),
                                                     get_mac_size(),
                                                     m_buffer.get(),
                                                     static_cast<int>(get_iv_size()),
                                                     m_auxiliary.get(),
-                                                    sizeof(std::uint32_t) + m_padding_size,
+                                                    sizeof(std::uint32_t) + sizeof(std::uint32_t) + m_padding_size,
                                                     m_buffer.get() + get_iv_size(),
                                                     out_size);
 
@@ -177,13 +191,23 @@ namespace lite
             generate_random(m_buffer.get(), get_iv_size());
         } while (is_all_zeros(m_buffer.get(), get_iv_size()));
 
+        auto version = make_unique_array<byte>(4);
+        auto pos_int = block_number * 4;
+        if (i_stream->read(version.get(), pos_int, 4) != 4) {
+            *version.get() = 1;
+        } else {
+            *version.get() = *version.get() + 1;
+        }
+        i_stream->write(version.get(), pos_int, 4);
+        std::memcpy(m_auxiliary.get() + sizeof(std::uint32_t), version.get(), sizeof(std::uint32_t));
+
         m_encryptor.EncryptAndAuthenticate(m_buffer.get() + get_iv_size(),
                                            m_buffer.get() + get_iv_size() + size,
                                            get_mac_size(),
                                            m_buffer.get(),
                                            static_cast<int>(get_iv_size()),
                                            m_auxiliary.get(),
-                                           sizeof(std::uint32_t) + m_padding_size,
+                                           sizeof(std::uint32_t) + sizeof(std::uint32_t) + m_padding_size,
                                            static_cast<const byte*>(input),
                                            size);
 

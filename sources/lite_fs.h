@@ -155,6 +155,7 @@ namespace lite
         CryptoPP::GCM<CryptoPP::AES>::Decryption m_xattr_dec;
         CryptoPP::ECB_Mode<CryptoPP::AES>::Encryption m_padding_aes;
         std::shared_ptr<const securefs::OSService> m_root;
+        std::shared_ptr<const securefs::OSService> i_root;
         unsigned m_block_size, m_iv_size, m_max_padding_size;
         unsigned m_flags;
 
