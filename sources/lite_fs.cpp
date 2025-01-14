@@ -1,5 +1,6 @@
 #include "lite_fs.h"
 #include "constants.h"
+#include "integrity/integrity.h"
 #include "lock_guard.h"
 #include "logger.h"
 
@@ -107,6 +108,66 @@ namespace lite
         return result;
     }
 
+    std::tuple<std::string, std::unique_ptr<byte[]>, int> encrypt_path_get_name(std::shared_ptr<const securefs::OSService> root, CryptoPP::GCM<CryptoPP::AES>::Encryption encryptor, StringRef path)
+    {
+        byte buffer[2032];
+        std::string result;
+        result.reserve((path.size() * 8 + 4) / 5);
+        size_t last_nonseparator_index = 0;
+        std::string encoded_part;
+        std::unique_ptr<byte[]> enc_name;
+        int size;
+
+        for (size_t i = 0; i <= path.size(); ++i)
+        {
+            if (i >= path.size() || path[i] == '/')
+            {
+                if (i > last_nonseparator_index)
+                {
+                    const char* slice = path.data() + last_nonseparator_index;
+                    size_t slice_size = i - last_nonseparator_index;
+                    if (slice_size > 2000)
+                        throwVFSException(ENAMETOOLONG);
+
+                    // 从当前result中取出当前目录 id
+                    // result + .securefs.dirid
+                    std::string dirid_str = result.substr(1) + DIRID_FILE_NAME;
+                    StringRef dirid_path(dirid_str);
+                    auto dirid_file = root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+                    CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+                    dirid_file->read(id.data(), 0, id.size());
+
+                    int enc_data_size = slice_size + 16;
+                    // 加密并拼接加密文件名
+                    encryptor.EncryptAndAuthenticate(buffer,
+                                                     buffer + slice_size,
+                                                     16,
+                                                     id.data(),
+                                                     12,
+                                                     nullptr,
+                                                     0,
+                                                     reinterpret_cast<const byte*>(slice),
+                                                     slice_size);
+                    base32_encode(buffer, enc_data_size, encoded_part);
+
+                    // 添加到result中
+                    result.append(encoded_part);
+
+                    // 如果加密到最后一个文件名，则将其取出
+                    if (i == path.size()){
+                        enc_name = make_unique_array<byte>(enc_data_size);
+                        std::memcpy(enc_name.get(), buffer, enc_data_size);
+                        size = enc_data_size;
+                    }
+                }
+                if (i < path.size())
+                    result.push_back('/');
+                last_nonseparator_index = i + 1;
+            }
+        }
+        return std::make_tuple(result, std::move(enc_name), size);
+    }
+
     std::string decrypt_path(std::shared_ptr<const securefs::OSService> root, CryptoPP::GCM<CryptoPP::AES>::Decryption decryptor, StringRef path)
     {
         byte string_buffer[2032];
@@ -194,6 +255,42 @@ namespace lite
         }
     }
 
+    // 只对文件用，会获取加密文件名
+    std::tuple<std::string, std::unique_ptr<byte[]>, int> FileSystem::translate_path_get_name(StringRef path, bool preserve_leading_slash)
+    {
+        if (path.empty())
+        {
+            return {};
+        }
+        else if (path.size() == 1 && path[0] == '/')
+        {
+            if (preserve_leading_slash)
+            {
+                return std::make_tuple("/", make_unique_array<byte>(8), 8);
+            }
+            else
+            {
+                return std::make_tuple(".", make_unique_array<byte>(8), 8);
+            }
+        }
+        else
+        {
+            std::tuple<std::string, std::unique_ptr<byte[]>, int> result = lite::encrypt_path_get_name(
+                m_root,
+                m_name_encryptor,
+                transform(path, m_flags & kOptionCaseFoldFileName, m_flags & kOptionNFCFileName)
+                    .get());
+
+            std::string& str = std::get<0>(result);
+            if (!preserve_leading_slash && !str.empty() && str[0] == '/')
+            {
+                str.erase(str.begin());
+            }
+            TRACE_LOG("Translate path %s into %s", path.c_str(), str.c_str());
+            return result;
+        }
+    }
+
     AutoClosedFile FileSystem::open(StringRef path, int flags, fuse_mode_t mode)
     {
         if (flags & O_APPEND)
@@ -213,9 +310,14 @@ namespace lite
         {
             mode |= S_IRUSR;
         }
-        auto file_stream = m_root->open_file_stream(translate_path(path, false), flags, mode);
+
+        auto result = translate_path_get_name(path, false);
+
+        auto file_stream = m_root->open_file_stream(std::get<0>(result), flags, mode);
         AutoClosedFile fp(new File(file_stream,
                                    i_root,
+                                   std::move(std::get<1>(result)),
+                                   std::get<2>(result),
                                    m_content_key,
                                    m_block_size,
                                    m_iv_size,
@@ -275,6 +377,8 @@ namespace lite
                         auto fs = m_root->open_file_stream(enc_path, O_RDONLY, 0);
                         AESGCMCryptStream stream(std::move(fs),
                                                  i_root,
+                                                 nullptr,
+                                                 0,
                                                  m_content_key,
                                                  m_block_size,
                                                  m_iv_size,
@@ -301,7 +405,8 @@ namespace lite
 
     void FileSystem::mkdir(StringRef path, fuse_mode_t mode)
     {
-        std::string encrypt_path = translate_path(path, false);
+        auto result = translate_path_get_name(path, false);
+        std::string& encrypt_path = std::get<0>(result);
         m_root->mkdir(encrypt_path, mode);
         // 在新创建的目录中创建 securefs.dirid 文件，存放这个目录的 id（16字节）
         std::string dirid_str = encrypt_path + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
@@ -310,43 +415,59 @@ namespace lite
         CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
         generate_random(id.data(), id.size());
         dirid_file->write(id.data(), 0, id.size());
+        // 存入到hashmap中
+        auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+        integrity::key_type k(std::get<1>(result).get(), std::get<2>(result));
+        integrity::value_type v(id.data());
+        hashmap[k] = v;
     }
 
     void FileSystem::rmdir(StringRef path)
     {
         // 先删除底层存储中的 .securefs.dirid 文件
-        std::string encrypt_path = translate_path(path, false);
+        auto result = translate_path_get_name(path, false);
+        std::string& encrypt_path = std::get<0>(result);
         std::string dirid_str = encrypt_path + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
         StringRef dirid_path(dirid_str);
         m_root->remove_file(dirid_path);
         // 再删除目录
         m_root->remove_directory(encrypt_path);
+        // 从hashmap中删除
+        auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+        integrity::key_type k(std::get<1>(result).get(), std::get<2>(result));
+        hashmap.erase(k);
     }
 
     void FileSystem::rename(StringRef from, StringRef to)
     {
-        // 如果 to 存在则要删除对应的 int 文件
-        // TODO 这里后面可以优化为从hashmap里面取出id
         // TODO macos 中可能 textedit 使用了 map，导致新创建的临时文件的版本号文件没有内容，导致报错（还没有找到具体原因）
-        std::string encrypt_path = translate_path(to, false);
+        auto to_result = translate_path_get_name(to, false);
+        std::string& to_path = std::get<0>(to_result);
+        auto from_result = translate_path_get_name(from, false);
+        std::string& from_path = std::get<0>(from_result);
 
-        struct fuse_stat fstbuf;
-        if (m_root->stat(encrypt_path, &fstbuf) && S_ISREG(fstbuf.st_mode)){
-            auto file_stream = m_root->open_file_stream(encrypt_path, O_RDWR, S_IRWXU);
+        // 从hashmap中读取to，如果存在，删除对应int文件和kv
+        auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+        integrity::key_type to_k(std::get<1>(to_result).get(), std::get<2>(to_result));
+        auto it = hashmap.find(to_k);
+        if (it != hashmap.end()) {
             CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
-            auto rc = file_stream->read(id.data(), 0, id.size());
-            if (rc != id.size()) {
-                throwInvalidArgumentException("Underlying stream has invalid ID size");
-            }
+            std::memcpy(id.data(), it->second.getData(), 16);
+            hashmap.erase(to_k);
             std::string int_path;
             base32_encode(id.data(), id.size(), int_path);
-            // 先重命名，再删除 id，否则可能导致读取id失败
-            m_root->rename(translate_path(from, false), encrypt_path);
             i_root->remove_file(int_path);
         }
-        else {
-            m_root->rename(translate_path(from, false), encrypt_path);
+        // 更新kv
+        integrity::key_type from_k(std::get<1>(from_result).get(), std::get<2>(from_result));
+        auto it2 = hashmap.find(from_k);
+        if (it2 != hashmap.end()) {
+            integrity::value_type from_v(it2->second);
+            hashmap.erase(from_k);
+            hashmap[to_k] = from_v;
         }
+
+        m_root->rename(from_path, to_path);
     }
 
     void FileSystem::chmod(StringRef path, fuse_mode_t mode)
@@ -394,10 +515,18 @@ namespace lite
     }
 
     void FileSystem::unlink(StringRef path) {
-        std::string encrypt_path = translate_path(path, false);
+        auto result = translate_path_get_name(path, false);
+
+        // 从hashmap中删除kv
+        if (std::get<1>(result) != nullptr && std::get<2>(result) > 0) {
+            auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+            integrity::key_type k(std::get<1>(result).get(), std::get<2>(result));
+            hashmap.erase(k);
+        }
+
         // TODO 这里后面可以优化为从hashmap里面取出id
         CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
-        auto file_stream = m_root->open_file_stream(encrypt_path, O_RDWR, S_IRWXU);
+        auto file_stream = m_root->open_file_stream(std::get<0>(result), O_RDWR, S_IRWXU);
         auto rc = file_stream->read(id.data(), 0, id.size());
         if (rc != id.size()) {
             throwInvalidArgumentException("Underlying stream has invalid ID size");
@@ -405,7 +534,7 @@ namespace lite
         std::string int_path;
         base32_encode(id.data(), id.size(), int_path);
 
-        m_root->remove_file(encrypt_path);
+        m_root->remove_file(std::get<0>(result));
         i_root->remove_file(int_path);
     }
 
@@ -481,6 +610,18 @@ namespace lite
                 try
                 {
                     base32_decode(under_name.data(), under_name.size(), decoded_bytes);
+                    // 读取一个目录项
+                    // 判断这个目录项是否在kv中（回滚攻击）
+                    auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+                    integrity::key_type k(reinterpret_cast<byte*>(&decoded_bytes[0]), decoded_bytes.size());
+                    auto it = hashmap.find(k);
+                    if (it == hashmap.end()) {
+                        throw LiteIntegrityVerificationException();
+                    }
+
+                    // 打开文件，会构造加密对象，会去验证id（未对调id攻击）
+                    // 其实这个防范是没有必要的，同时对调加密文件名和id，读取目录项也是成功的，只有打开文件读取进行read解密的时候，才会发现用不了
+
                     if (decoded_bytes.size() <= AES_SIV::IV_SIZE)
                     {
                         WARN_LOG("Skipping too small encrypted filename %s", under_name.c_str());
@@ -530,7 +671,8 @@ namespace lite
         if (path.empty())
             throwVFSException(EINVAL);
 
-        std::string encrypt_path = translate_path(path, false);
+        auto result = translate_path_get_name(path, false);
+        std::string& encrypt_path = std::get<0>(result);
         std::string dirid_str;
         if (encrypt_path == ".") {
             dirid_str = DIRID_FILE_NAME;
@@ -542,6 +684,14 @@ namespace lite
         auto dirid_file = m_root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
         CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
         dirid_file->read(id.data(), 0, id.size());
+
+        // 比较与kv中的目录是否一致（目录也是文件的一种）
+        auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+        integrity::key_type k(std::get<1>(result).get(), std::get<2>(result));
+        auto it = hashmap.find(k);
+        if (it == hashmap.end() || std::memcmp(id.data(), it->second.getData(), 16)) {
+            throw LiteIntegrityVerificationException();
+        }
 
         return securefs::make_unique<LiteDirectory>(
             path.to_string(),

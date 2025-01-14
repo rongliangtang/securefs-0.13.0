@@ -9,6 +9,8 @@
 #include "operations.h"
 #include "platform.h"
 
+#include "integrity/integrity.h"
+
 namespace securefs
 {
 namespace lite
@@ -117,6 +119,12 @@ namespace lite
         INFO_LOG("init");
         auto ctx = new BundledContext;
         ctx->opt = static_cast<operations::MountOptions*>(args);
+
+        // 加载 kv
+        using namespace integrity;
+        Integrity& integrity = Integrity::getInstance();
+        integrity.loadData();
+
         return ctx;
     }
 
@@ -124,6 +132,11 @@ namespace lite
     {
         delete static_cast<BundledContext*>(fuse_get_context()->private_data);
         INFO_LOG("destroy");
+
+        // 保存 kv
+        using namespace integrity;
+        Integrity& integrity = Integrity::getInstance();
+        integrity.saveData();
     }
 
     int statfs(const char* path, struct fuse_statvfs* buf)

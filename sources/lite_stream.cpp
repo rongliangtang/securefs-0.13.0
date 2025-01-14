@@ -7,6 +7,8 @@
 #include <cryptopp/modes.h>
 #include <cryptopp/osrng.h>
 
+#include "integrity/integrity.h"
+
 namespace securefs
 {
 namespace lite
@@ -34,8 +36,11 @@ namespace lite
     }    // namespace
     std::string CorruptedStreamException::message() const { return "Stream is corrupted"; }
 
+    // 需要注意的是getattr中传入的m_name是nullptr
     AESGCMCryptStream::AESGCMCryptStream(std::shared_ptr<StreamBase> stream,
                                          std::shared_ptr<const securefs::OSService> root,
+                                         std::unique_ptr<byte[]> name,
+                                         int size,
                                          const key_type& master_key,
                                          unsigned block_size,
                                          unsigned iv_size,
@@ -45,10 +50,19 @@ namespace lite
         : BlockBasedStream(block_size)
         , m_stream(std::move(stream))
         , i_root(root)
+        , m_size(size)
         , m_iv_size(iv_size)
         , m_padding_size(0)
         , m_check(check)
     {
+        // 判断name
+        if (name != nullptr) {
+            m_name = std::move(name);
+        }
+        else {
+            m_name = nullptr;
+        }
+
         if (m_iv_size < 12 || m_iv_size > 32)
             throwInvalidArgumentException("IV size too small or too large");
         if (!m_stream)
@@ -64,7 +78,27 @@ namespace lite
         // 创建文件
         if (rc == 0)
         {
-            generate_random(id.data(), id.size());
+            // TODO 当使用 O_TRUNC 清空文件时，会传递到加密文件上，会清空加密文件，这时会分配新的id，所以这时需要删除旧的id
+            // 解决方法：从kv中判断有无，有的话把旧文件删除
+            if (m_name != nullptr && m_size > 0) {
+                auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+                integrity::key_type k(m_name.get(), m_size);
+                auto it = hashmap.find(k);
+                if (it != hashmap.end()) {
+                    std::memcpy(id.data(), it->second.getData(), 16);
+                }
+                else {
+                    generate_random(id.data(), id.size());
+                    // 创建文件，插入 kv（先插入kv，再write）
+                    integrity::value_type v(id.data());
+                    hashmap[k] = v;
+                }
+            }
+            else{
+                generate_random(id.data(), id.size());
+            }
+
+
             m_stream->write(id.data(), 0, id.size());
             m_padding_size = compute_padding(max_padding_size, padding_aes, id.data(), id.size());
             m_auxiliary.reset(new byte[sizeof(std::uint32_t) + sizeof(std::uint32_t) + m_padding_size]);
@@ -88,6 +122,16 @@ namespace lite
                        m_auxiliary.get() + sizeof(std::uint32_t), id.size(), m_padding_size)
                     != m_padding_size)
                 throwInvalidArgumentException("Invalid padding in the underlying file");
+
+            // 打开文件，判断加密文件名是否在 kv 中，且id与kv中是否一致
+            if (m_name != nullptr && m_size > 0) {
+                auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+                integrity::key_type k(m_name.get(), m_size);
+                auto it = hashmap.find(k);
+                if (it == hashmap.end() || std::memcmp(id.data(), it->second.getData(), 16)) {
+                    throw LiteIntegrityVerificationException();
+                }
+            }
         }
 
         std::string int_path;

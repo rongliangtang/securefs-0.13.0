@@ -1,6 +1,7 @@
 #include "commands.h"
 #include "exceptions.h"
 #include "git-version.h"
+#include "integrity/integrity.h"
 #include "lite_operations.h"
 #include "lock_enabled.h"
 #include "myutils.h"
@@ -854,6 +855,14 @@ public:
         CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
         generate_random(id.data(), id.size());
         dirid_stream->write(id.data(), 0, id.size());
+        // 保存根目录id到kv中
+        using namespace integrity;
+        Integrity& integrity = Integrity::getInstance();
+        auto& hashmap = integrity.getHashMap();
+        integrity::key_type k(new byte[8], 8);
+        integrity::value_type v(id.data());
+        hashmap[k] = v;
+        integrity.saveData();
 
         return 0;
     }

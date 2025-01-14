@@ -161,6 +161,7 @@ namespace lite
 
     private:
         std::string translate_path(StringRef path, bool preserve_leading_slash);
+        std::tuple<std::string, std::unique_ptr<byte[]>, int> translate_path_get_name(StringRef path, bool preserve_leading_slash);
 
     public:
         FileSystem(std::shared_ptr<const securefs::OSService> root,

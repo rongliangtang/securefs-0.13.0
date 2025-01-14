@@ -28,6 +28,8 @@ namespace lite
         std::shared_ptr<StreamBase> i_stream;
         std::shared_ptr<const securefs::OSService> i_root;
         std::unique_ptr<byte[]> m_buffer, m_auxiliary;
+        std::unique_ptr<byte[]> m_name;
+        int m_size;
         unsigned m_iv_size, m_padding_size;
         bool m_check;
 
@@ -59,6 +61,8 @@ namespace lite
     public:
         explicit AESGCMCryptStream(std::shared_ptr<StreamBase> stream,
                                    std::shared_ptr<const securefs::OSService> root,
+                                   std::unique_ptr<byte[]> name,
+                                   int size,
                                    const key_type& master_key,
                                    unsigned block_size = 4096,
                                    unsigned iv_size = 12,
