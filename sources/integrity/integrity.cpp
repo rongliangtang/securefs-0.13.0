@@ -1,4 +1,4 @@
-#include "Integrity.h"
+#include "integrity.h"
 #include <cstdlib>
 #include <stdexcept>
 #include <fstream>

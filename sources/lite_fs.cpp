@@ -47,7 +47,9 @@ namespace lite
         m_name_decryptor.SetKeyWithIV(name_key.data(), name_key.size(), null_iv, sizeof(null_iv));
         m_xattr_enc.SetKeyWithIV(xattr_key.data(), xattr_key.size(), null_iv, sizeof(null_iv));
         m_xattr_dec.SetKeyWithIV(xattr_key.data(), xattr_key.size(), null_iv, sizeof(null_iv));
+        // TODO 根据不同操作系统去改变
         i_root = std::make_shared<OSService>("/Users/liang/Downloads/int");
+//        i_root = std::make_shared<OSService>("/home/ubuntu/tangrl/experiment/securefs/int");
     }
 
     FileSystem::~FileSystem() {}
@@ -264,13 +266,15 @@ namespace lite
         }
         else if (path.size() == 1 && path[0] == '/')
         {
+            auto name = make_unique_array<byte>(8);
+            std::fill(name.get(), name.get() + 8, 0);
             if (preserve_leading_slash)
             {
-                return std::make_tuple("/", make_unique_array<byte>(8), 8);
+                return std::make_tuple("/", std::move(name), 8);
             }
             else
             {
-                return std::make_tuple(".", make_unique_array<byte>(8), 8);
+                return std::make_tuple(".", std::move(name), 8);
             }
         }
         else
@@ -440,7 +444,7 @@ namespace lite
 
     void FileSystem::rename(StringRef from, StringRef to)
     {
-        // TODO macos 中可能 textedit 使用了 map，导致新创建的临时文件的版本号文件没有内容，导致报错（还没有找到具体原因）
+        // TODO macos 中可能 textedit 使用了 mmap，导致新创建的临时文件的版本号文件没有内容，导致报错（还没有找到具体原因）
         auto to_result = translate_path_get_name(to, false);
         std::string& to_path = std::get<0>(to_result);
         auto from_result = translate_path_get_name(from, false);
@@ -517,25 +521,25 @@ namespace lite
     void FileSystem::unlink(StringRef path) {
         auto result = translate_path_get_name(path, false);
 
-        // 从hashmap中删除kv
+        // 删除数据文件
+        m_root->remove_file(std::get<0>(result));
+
+        // 从hashmap取出id删除int文件，删除kv，
         if (std::get<1>(result) != nullptr && std::get<2>(result) > 0) {
             auto& hashmap = integrity::Integrity::getInstance().getHashMap();
             integrity::key_type k(std::get<1>(result).get(), std::get<2>(result));
-            hashmap.erase(k);
-        }
+            auto it = hashmap.find(k);
+            if (it != hashmap.end()) {
+              CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
+              std::memcpy(id.data(), it->second.getData(), 16);
+              std::string int_path;
+              base32_encode(id.data(), id.size(), int_path);
+              i_root->remove_file(int_path);
+              hashmap.erase(k);
+            }
 
-        // TODO 这里后面可以优化为从hashmap里面取出id
-        CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
-        auto file_stream = m_root->open_file_stream(std::get<0>(result), O_RDWR, S_IRWXU);
-        auto rc = file_stream->read(id.data(), 0, id.size());
-        if (rc != id.size()) {
-            throwInvalidArgumentException("Underlying stream has invalid ID size");
-        }
-        std::string int_path;
-        base32_encode(id.data(), id.size(), int_path);
 
-        m_root->remove_file(std::get<0>(result));
-        i_root->remove_file(int_path);
+        }
     }
 
     void FileSystem::link(StringRef src, StringRef dest)

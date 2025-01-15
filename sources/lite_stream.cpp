@@ -78,7 +78,7 @@ namespace lite
         // 创建文件
         if (rc == 0)
         {
-            // TODO 当使用 O_TRUNC 清空文件时，会传递到加密文件上，会清空加密文件，这时会分配新的id，所以这时需要删除旧的id
+            // 当使用 O_TRUNC 清空文件时，会传递到加密文件上，会清空加密文件，这时会分配新的id，所以这时需要删除旧的id
             // 解决方法：从kv中判断有无，有的话把旧文件删除
             if (m_name != nullptr && m_size > 0) {
                 auto& hashmap = integrity::Integrity::getInstance().getHashMap();

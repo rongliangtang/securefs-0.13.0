@@ -859,7 +859,9 @@ public:
         using namespace integrity;
         Integrity& integrity = Integrity::getInstance();
         auto& hashmap = integrity.getHashMap();
-        integrity::key_type k(new byte[8], 8);
+        auto name = make_unique_array<byte>(8);
+        std::fill(name.get(), name.get() + 8, 0);
+        integrity::key_type k(name.get(), 8);
         integrity::value_type v(id.data());
         hashmap[k] = v;
         integrity.saveData();
