@@ -81,7 +81,12 @@ namespace lite
 
                     // 从当前result中取出当前目录 id
                     // result + .securefs.dirid
-                    std::string dirid_str = result.substr(1) + DIRID_FILE_NAME;
+                    std::string dirid_str;
+                    if (result.empty()) {
+                      dirid_str = DIRID_FILE_NAME;
+                    } else {
+                      dirid_str = result.substr(1) + DIRID_FILE_NAME;
+                    }
                     StringRef dirid_path(dirid_str);
                     auto dirid_file = root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
                     CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
@@ -192,8 +197,15 @@ namespace lite
 
                     // 从当前path中取出当前目录 id
                     // TODO 这部分代码没有调试
-                    std::string  temp = path.substr(0, last_nonseparator_index - 1);
-                    std::string dirid_str = temp.empty() ? DIRID_FILE_NAME : temp.substr(1) + PATH_SEPARATOR_STRING + DIRID_FILE_NAME;
+                    std::string dirid_str;
+                    std::size_t pos = path.to_string().rfind('/');
+                    if (pos != std::string::npos) {
+                      // 如果找到了反斜杠，提取从开头到反斜杠的位置的子字符串
+                      dirid_str =  path.substr(0, pos + 1) + DIRID_FILE_NAME;
+                    } else {
+                      // 如果没有找到反斜杠，直接返回 "dirid"
+                      dirid_str =  DIRID_FILE_NAME;
+                    }
                     StringRef dirid_path(dirid_str);
                     auto dirid_file = root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
                     CryptoPP::FixedSizeAlignedSecBlock<byte, 16> id;
@@ -509,8 +521,16 @@ namespace lite
 
     void FileSystem::symlink(StringRef to, StringRef from)
     {
-        auto eto = translate_path(to, true), efrom = translate_path(from, false);
+        auto eto = translate_path(to, true);
+        auto from_result = translate_path_get_name(from, false);
+        std::string& efrom = std::get<0>(from_result);
         m_root->symlink(eto, efrom);
+        // 将 from 添加到 hashmap 中
+        auto& hashmap = integrity::Integrity::getInstance().getHashMap();
+        integrity::key_type from_k(std::get<1>(from_result).get(), std::get<2>(from_result));
+        integrity::value_type from_v;
+        hashmap[from_k] = from_v;
+
     }
 
     void FileSystem::utimens(StringRef path, const fuse_timespec* ts)
