@@ -85,7 +85,11 @@ namespace lite
                     if (result.empty()) {
                       dirid_str = DIRID_FILE_NAME;
                     } else {
-                      dirid_str = result.substr(1) + DIRID_FILE_NAME;
+                      if (result[0] == '/') {
+                        dirid_str = result.substr(1) + DIRID_FILE_NAME;
+                      } else {
+                        dirid_str = result + DIRID_FILE_NAME;
+                      }
                     }
                     StringRef dirid_path(dirid_str);
                     auto dirid_file = root->open_file_stream(dirid_path, O_RDONLY, S_IRWXU | S_IRWXG | S_IRWXO);
@@ -197,11 +201,13 @@ namespace lite
 
                     // 从当前path中取出当前目录 id
                     // TODO 这部分代码没有调试
+                    // 从前往后解密
                     std::string dirid_str;
-                    std::size_t pos = path.to_string().rfind('/');
+                    std::string now_path = path.substr(0, last_nonseparator_index);
+                    std::size_t pos = now_path.rfind('/');
                     if (pos != std::string::npos) {
                       // 如果找到了反斜杠，提取从开头到反斜杠的位置的子字符串
-                      dirid_str =  path.substr(0, pos + 1) + DIRID_FILE_NAME;
+                      dirid_str =  now_path.substr(0, pos + 1) + DIRID_FILE_NAME;
                     } else {
                       // 如果没有找到反斜杠，直接返回 "dirid"
                       dirid_str =  DIRID_FILE_NAME;
@@ -521,6 +527,8 @@ namespace lite
 
     void FileSystem::symlink(StringRef to, StringRef from)
     {
+        // TODO 复制符号链接存在问题
+
         auto eto = translate_path(to, true);
         auto from_result = translate_path_get_name(from, false);
         std::string& efrom = std::get<0>(from_result);
@@ -540,6 +548,8 @@ namespace lite
 
     void FileSystem::unlink(StringRef path) {
         auto result = translate_path_get_name(path, false);
+
+        // TODO 如果是符号链接，没有数据文件，不需要删除
 
         // 删除数据文件
         m_root->remove_file(std::get<0>(result));
